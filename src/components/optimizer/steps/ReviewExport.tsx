@@ -130,7 +130,14 @@ export function ReviewExport() {
     errors: contentItems.filter(i => i.status === 'error').length,
   };
 
-  const hasAiProvider = config.geminiApiKey || config.openaiApiKey || config.anthropicApiKey;
+  // Check if any AI provider key is configured
+  const hasAiProvider = !!(
+    config.geminiApiKey || 
+    config.openaiApiKey || 
+    config.anthropicApiKey ||
+    config.openrouterApiKey ||
+    config.groqApiKey
+  );
   const hasSerper = !!config.serperApiKey;
 
   return (
