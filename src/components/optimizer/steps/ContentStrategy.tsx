@@ -52,99 +52,72 @@ export function ContentStrategy() {
     const supabaseAnonKey = getSupabaseAnonKey();
     const trimmed = targetUrl.trim();
 
-    const proxyController = new AbortController();
-    const supabaseController = new AbortController();
-
-    const fetchViaProxy = async (): Promise<string> => {
-      // In Lovable preview (Vite dev server), Cloudflare Pages Functions (/api/fetch-sitemap)
-      // do NOT run. But /api/proxy is wired via Vite's dev proxy to allorigins.
-      // In production on Cloudflare Pages, /api/proxy is handled by functions/api/proxy.ts.
-      const proxyUrl = `/api/proxy?url=${encodeURIComponent(trimmed)}`;
-      const timeoutId = window.setTimeout(() => proxyController.abort(), 30000);
+    const fetchWithTimeout = async (url: string, init: RequestInit, ms: number): Promise<Response> => {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), ms);
       try {
-        const resp = await fetch(proxyUrl, { method: "GET", signal: proxyController.signal });
-        const text = await resp.text();
-        if (!resp.ok) {
-          throw new Error(`Proxy fetch-sitemap failed (${resp.status}): ${text.slice(0, 200)}`);
+        return await fetch(url, { ...init, signal: controller.signal });
+      } catch (e) {
+        // Normalize AbortError so users don't see "signal is aborted without reason"
+        if (e instanceof DOMException && e.name === "AbortError") {
+          throw new Error(`Request timed out after ${Math.round(ms / 1000)}s`);
         }
-        return text;
+        throw e;
       } finally {
         window.clearTimeout(timeoutId);
       }
     };
 
-    const fetchViaSupabase = async (): Promise<string> => {
-      if (!supabaseUrl || !supabaseAnonKey) {
-        throw new Error("Supabase not configured");
+    // Primary: /api/proxy (works in preview + production)
+    const proxyUrl = `/api/proxy?url=${encodeURIComponent(trimmed)}`;
+    try {
+      const resp = await fetchWithTimeout(proxyUrl, { method: "GET" }, 45000);
+      const text = await resp.text();
+      if (!resp.ok) {
+        throw new Error(`Proxy fetch-sitemap failed (${resp.status}): ${text.slice(0, 200)}`);
       }
+      return text;
+    } catch (proxyErr) {
+      console.warn("[Sitemap] /api/proxy failed, trying Supabase fetch-sitemap as fallback", proxyErr);
+    }
 
+    // Fallback: external Supabase edge function if configured
+    if (supabaseUrl && supabaseAnonKey) {
       const fnUrl = `${supabaseUrl.replace(/\/$/, "")}/functions/v1/fetch-sitemap?url=${encodeURIComponent(
         trimmed
       )}`;
 
-      const timeoutId = window.setTimeout(() => supabaseController.abort(), 12000);
-      try {
-        const resp = await fetch(fnUrl, {
+      const resp = await fetchWithTimeout(
+        fnUrl,
+        {
           method: "GET",
           headers: {
             apikey: supabaseAnonKey,
             Authorization: `Bearer ${supabaseAnonKey}`,
           },
-          signal: supabaseController.signal,
-        });
-
-        const contentType = resp.headers.get("content-type") || "";
-        const text = await resp.text();
-
-        if (!resp.ok) {
-          throw new Error(`Supabase fetch-sitemap failed (${resp.status}): ${text.slice(0, 200)}`);
-        }
-
-        if (contentType.includes("application/json")) {
-          try {
-            const json = JSON.parse(text);
-            return json?.content ?? text;
-          } catch {
-            return text;
-          }
-        }
-
-        return text;
-      } finally {
-        window.clearTimeout(timeoutId);
-      }
-    };
-
-    // Race both approaches: fastest successful wins.
-    const attempts: Array<Promise<string>> = [fetchViaProxy()];
-    if (supabaseUrl && supabaseAnonKey) {
-      attempts.push(
-        fetchViaSupabase().catch((e) => {
-          console.warn("[Sitemap] Supabase fetch-sitemap failed (using proxy instead)", e);
-          throw e;
-        })
+        },
+        45000
       );
+
+      const contentType = resp.headers.get("content-type") || "";
+      const text = await resp.text();
+      if (!resp.ok) {
+        throw new Error(`Supabase fetch-sitemap failed (${resp.status}): ${text.slice(0, 200)}`);
+      }
+
+      if (contentType.includes("application/json")) {
+        try {
+          const json = JSON.parse(text);
+          return json?.content ?? text;
+        } catch {
+          return text;
+        }
+      }
+
+      return text;
     }
 
-    return await new Promise<string>((resolve, reject) => {
-      let failures = 0;
-      let lastError: unknown = undefined;
-
-      attempts.forEach((p) => {
-        p.then((text) => {
-          // Stop the other in-flight request.
-          proxyController.abort();
-          supabaseController.abort();
-          resolve(text);
-        }).catch((err) => {
-          failures += 1;
-          lastError = err;
-          if (failures >= attempts.length) {
-            reject(lastError);
-          }
-        });
-      });
-    });
+    throw new Error("Failed to fetch sitemap (proxy failed and Supabase is not configured)");
   };
 
   const handleGenerateContentPlan = () => {
