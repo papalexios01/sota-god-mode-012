@@ -6,7 +6,7 @@ import {
   CheckCircle, Clock, XCircle, Loader2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { createOrchestrator, globalPerformanceTracker, type GeneratedContent } from "@/lib/sota";
+import { createOrchestrator, globalPerformanceTracker, type GeneratedContent, type NeuronWriterAnalysis } from "@/lib/sota";
 import { ContentViewerPanel } from "../ContentViewerPanel";
 import { EnhancedGenerationModal, type GenerationStep } from "../EnhancedGenerationModal";
 import { ContentIntelligenceDashboard } from "../ContentIntelligenceDashboard";
@@ -27,6 +27,7 @@ export function ReviewExport() {
   // Content Viewer State
   const [viewingItem, setViewingItem] = useState<ContentItem | null>(null);
   const [generatedContents, setGeneratedContents] = useState<Record<string, GeneratedContent>>({});
+  const [neuronDataStore, setNeuronDataStore] = useState<Record<string, NeuronWriterAnalysis>>({});
   
   // Generation State
   const [isGenerating, setIsGenerating] = useState(false);
@@ -494,6 +495,7 @@ export function ReviewExport() {
         <ContentViewerPanel
           item={viewingItem}
           generatedContent={generatedContents[viewingItem.id] || null}
+          neuronData={neuronDataStore[viewingItem.id] || null}
           onClose={() => setViewingItem(null)}
           onPrevious={handlePreviousItem}
           onNext={handleNextItem}

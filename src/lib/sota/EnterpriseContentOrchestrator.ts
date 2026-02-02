@@ -240,16 +240,73 @@ Output ONLY the title, nothing else.`;
   ): Promise<string> {
     const targetWordCount = options.targetWordCount || serpAnalysis.recommendedWordCount || 2500;
     
-    const systemPrompt = `You are an expert content writer with 15+ years of experience. Write like Alex Hormozi - direct, data-driven, conversational, and actionable.
+    const systemPrompt = `You are an EXPERT content writer who combines the persuasive power of Alex Hormozi with deep SEO expertise. Your content is:
 
-CRITICAL RULES:
-1. NEVER use AI trigger phrases like "delve", "in today's world", "it's important to note"
-2. Use short paragraphs (2-4 sentences max)
-3. Include specific data, statistics, and examples
-4. Write in first person occasionally ("I've found that...")
-5. Use bullet points and numbered lists liberally
-6. Every section should provide actionable value
-7. Include real-world examples and case studies`;
+ALEX HORMOZI WRITING STYLE:
+- Direct, punchy sentences. No fluff. Pure value.
+- Use "I" and "you" constantly - make it personal
+- Include specific numbers and data (e.g., "increased conversions by 347%")
+- Short paragraphs (2-4 sentences MAX)
+- Bold claims backed by evidence
+- Conversational but authoritative
+- Story-driven with real examples
+- Action-oriented with clear next steps
+
+FORBIDDEN AI PHRASES (NEVER USE):
+- "delve", "dive into", "in today's world", "it's important to note"
+- "comprehensive guide", "in this article", "let's explore"
+- "furthermore", "moreover", "in conclusion"
+- "cutting-edge", "game-changer", "revolutionary"
+- Any phrase that sounds like AI wrote it
+
+VISUAL CONTENT REQUIREMENTS:
+You MUST include these visual HTML elements to break up text:
+
+1. KEY TAKEAWAYS BOX (at start):
+<div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); border-radius: 16px; padding: 24px; margin: 24px 0;">
+  <h3 style="color: white; margin-top: 0; font-size: 20px;">🎯 Key Takeaways</h3>
+  <ul style="color: white; margin: 0; padding-left: 20px;">
+    <li>Point 1</li>
+    <li>Point 2</li>
+  </ul>
+</div>
+
+2. PRO TIP BOXES (2-3 throughout):
+<div style="background: #1e40af; border-left: 4px solid #3b82f6; padding: 16px 20px; margin: 20px 0; border-radius: 0 12px 12px 0;">
+  <strong style="color: #60a5fa;">💡 Pro Tip:</strong>
+  <span style="color: #e0e7ff;"> Your tip here</span>
+</div>
+
+3. WARNING/IMPORTANT BOXES (1-2):
+<div style="background: #dc2626; border-left: 4px solid #f87171; padding: 16px 20px; margin: 20px 0; border-radius: 0 12px 12px 0;">
+  <strong style="color: white;">⚠️ Important:</strong>
+  <span style="color: #fecaca;"> Critical information here</span>
+</div>
+
+4. DATA/COMPARISON TABLE (at least 1):
+<table style="width: 100%; border-collapse: collapse; margin: 24px 0; border-radius: 12px; overflow: hidden;">
+  <thead>
+    <tr style="background: #1f2937;">
+      <th style="padding: 14px; text-align: left; color: white; border-bottom: 2px solid #374151;">Column 1</th>
+      <th style="padding: 14px; text-align: left; color: white; border-bottom: 2px solid #374151;">Column 2</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr style="background: #111827;">
+      <td style="padding: 12px; color: #d1d5db; border-bottom: 1px solid #374151;">Data</td>
+      <td style="padding: 12px; color: #d1d5db; border-bottom: 1px solid #374151;">Data</td>
+    </tr>
+  </tbody>
+</table>
+
+5. STEP-BY-STEP BOX (for how-to sections):
+<div style="background: #1e293b; border-radius: 16px; padding: 24px; margin: 24px 0; border: 1px solid #334155;">
+  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+    <span style="background: #10b981; color: white; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold;">1</span>
+    <strong style="color: white;">Step Title</strong>
+  </div>
+  <p style="color: #94a3b8; margin: 0; padding-left: 44px;">Step description...</p>
+</div>`;
 
     const prompt = `Write a comprehensive ${targetWordCount}+ word article about "${keyword}".
 
@@ -261,27 +318,36 @@ ${serpAnalysis.recommendedHeadings.map((h, i) => `${i + 1}. ${h}`).join('\n')}
 CONTENT GAPS TO ADDRESS (what competitors are missing):
 ${serpAnalysis.contentGaps.slice(0, 5).join('\n')}
 
-SEMANTIC ENTITIES TO INCLUDE:
-${serpAnalysis.semanticEntities.slice(0, 10).join(', ')}
+SEMANTIC ENTITIES TO INCLUDE NATURALLY:
+${serpAnalysis.semanticEntities.slice(0, 15).join(', ')}
 
 ${videos.length > 0 ? `
-RELEVANT VIDEOS TO REFERENCE:
-${videos.map(v => `- "${v.title}" by ${v.channelTitle}`).join('\n')}
+YOUTUBE VIDEOS TO EMBED - Include this video in the content using this exact HTML:
+${videos.slice(0, 1).map(v => `
+<div style="position: relative; padding-bottom: 56.25%; height: 0; margin: 32px 0; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.3);">
+  <iframe src="https://www.youtube.com/embed/${v.id}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen title="${v.title}"></iframe>
+</div>
+<p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 8px;">📺 <strong>${v.title}</strong> by ${v.channelTitle}</p>
+`).join('')}
 ` : ''}
 
-${references.length > 0 ? `
-AUTHORITATIVE SOURCES TO CITE:
-${references.slice(0, 5).map(r => `- ${r.title} (${r.domain})`).join('\n')}
-` : ''}
+REQUIRED CONTENT ELEMENTS:
+1. Opening hook that grabs attention (first 2 sentences MUST be compelling)
+2. Key Takeaways box immediately after intro
+3. At least 2 Pro Tip boxes throughout
+4. At least 1 comparison/data table
+5. Real statistics with sources
+6. FAQ section with 6-8 questions
+7. Strong call-to-action at the end
 
-FORMAT REQUIREMENTS:
-- Use HTML formatting (h2, h3, p, ul, ol, strong, em)
-- Include a "Key Takeaways" box at the start (styled blockquote)
-- Include a data/comparison table where relevant
-- Include an FAQ section with 5-8 questions
-- End with a strong call-to-action
+OUTPUT FORMAT:
+- Pure HTML only (no markdown)
+- Use proper heading hierarchy (h2, h3)
+- Include all visual boxes as specified above
+- Make every paragraph valuable - NO FILLER
+- Write like you're talking to a friend who needs real help
 
-OUTPUT ONLY THE HTML CONTENT, NO MARKDOWN.`;
+Now write the BEST possible article about "${keyword}". Make it so good that readers share it.`;
 
     let result;
     if (this.config.useConsensus && this.engine.getAvailableModels().length > 1) {
@@ -294,22 +360,24 @@ OUTPUT ONLY THE HTML CONTENT, NO MARKDOWN.`;
         model: this.config.primaryModel || 'gemini',
         apiKeys: this.config.apiKeys,
         systemPrompt,
-        temperature: 0.8,
+        temperature: 0.75,
         maxTokens: 8192
       });
     }
 
-    // Add videos section if available
+    // Add videos section if available and not already embedded
     let finalContent = result.content;
-    if (videos.length > 0) {
+    if (videos.length > 0 && !finalContent.includes('youtube.com/embed')) {
       const videoSection = this.buildVideoSection(videos);
       finalContent = this.insertBeforeConclusion(finalContent, videoSection);
+      this.log('Injected YouTube video section');
     }
 
     // Add references section
     if (references.length > 0) {
       const referencesSection = this.referenceService.formatReferencesSection(references);
       finalContent += referencesSection;
+      this.log(`Added ${references.length} references`);
     }
 
     return finalContent;

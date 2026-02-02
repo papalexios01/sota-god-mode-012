@@ -69,8 +69,11 @@ export interface SERPAnalysis {
 }
 
 export interface InternalLink {
-  anchor: string;
+  anchor?: string;
+  anchorText?: string;
   targetUrl: string;
+  url?: string;
+  text?: string;
   context: string;
   priority: number;
   relevanceScore: number;
