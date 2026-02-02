@@ -36,21 +36,41 @@ function safeParseXml(xmlText: string): XMLDocument {
   return xmlDoc;
 }
 
-function extractLocs(xmlDoc: XMLDocument): string[] {
-  const locElements = xmlDoc.querySelectorAll("loc");
+function extractLocs(xmlDoc: XMLDocument, rawXml: string): string[] {
   const out: string[] = [];
-  locElements.forEach((loc) => {
-    const url = loc.textContent?.trim();
-    if (!url) return;
-    if (!url.startsWith("http://") && !url.startsWith("https://")) return;
+
+  // 1) Standard sitemaps: <loc>…</loc>
+  // 2) Namespaced sitemaps: <ns:loc>…</ns:loc>
+  const byNs = xmlDoc.getElementsByTagNameNS("*", "loc");
+  for (const el of Array.from(byNs)) {
+    const url = el.textContent?.trim();
+    if (!url) continue;
+    if (!url.startsWith("http://") && !url.startsWith("https://")) continue;
     out.push(url);
-  });
+  }
+
+  if (out.length > 0) return out;
+
+  // Fallback: regex extract (handles prefixes and avoids DOM quirks)
+  const regex = /<\s*(?:[A-Za-z_][\w.-]*:)?loc\s*>([\s\S]*?)<\s*\/\s*(?:[A-Za-z_][\w.-]*:)?loc\s*>/gi;
+  for (const match of rawXml.matchAll(regex)) {
+    const url = (match[1] || "").trim();
+    if (!url) continue;
+    if (!url.startsWith("http://") && !url.startsWith("https://")) continue;
+    out.push(url);
+  }
+
   return out;
 }
 
 function getSitemapKind(xmlDoc: XMLDocument): "index" | "urlset" | "unknown" {
-  if (xmlDoc.querySelector("sitemapindex")) return "index";
-  if (xmlDoc.querySelector("urlset")) return "urlset";
+  const root = xmlDoc.documentElement?.localName?.toLowerCase();
+  if (root === "sitemapindex") return "index";
+  if (root === "urlset") return "urlset";
+
+  // Namespace/prefix-safe fallbacks
+  if (xmlDoc.getElementsByTagNameNS("*", "sitemap").length > 0) return "index";
+  if (xmlDoc.getElementsByTagNameNS("*", "url").length > 0) return "urlset";
   return "unknown";
 }
 
@@ -107,7 +127,7 @@ export async function crawlSitemapUrls(
         const xmlText = await fetchSitemapXml(sitemap);
         const xmlDoc = safeParseXml(xmlText);
         const kind = getSitemapKind(xmlDoc);
-        const locs = extractLocs(xmlDoc);
+        const locs = extractLocs(xmlDoc, xmlText);
 
         if (kind === "index") {
           for (const loc of locs) {

@@ -181,7 +181,8 @@ export function ContentStrategy() {
 
       if (crawlRunIdRef.current !== runId) return;
 
-      setCrawledUrls(allUrls);
+      // Keep the UI snappy: store only a preview list here (full list is stored in the global store).
+      setCrawledUrls(allUrls.slice(0, 50));
       setSitemapUrls(allUrls);
       setCrawlFoundCount(allUrls.length);
       setCrawlStatus(`Done • ${allUrls.length.toLocaleString()} URLs`);
