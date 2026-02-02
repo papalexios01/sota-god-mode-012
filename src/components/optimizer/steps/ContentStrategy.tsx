@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useOptimizerStore } from "@/lib/store";
 import { 
   BookOpen, FileText, Target, RefreshCw, FolderOpen, Image,
@@ -8,6 +8,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { getSupabaseAnonKey, getSupabaseUrl } from "@/integrations/supabase/client";
+import { crawlSitemapUrls } from "@/lib/sitemap/crawlSitemap";
 
 const tabs = [
   { id: "bulk", label: "📚 Bulk Planner", icon: BookOpen },
@@ -42,6 +43,65 @@ export function ContentStrategy() {
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [isCrawling, setIsCrawling] = useState(false);
   const [crawledUrls, setCrawledUrls] = useState<string[]>([]);
+  const [crawlFoundCount, setCrawlFoundCount] = useState(0);
+  const [crawlStatus, setCrawlStatus] = useState<string>("");
+  const crawlRunIdRef = useRef(0);
+
+  const fetchSitemapText = async (targetUrl: string): Promise<string> => {
+    const supabaseUrl = getSupabaseUrl();
+    const supabaseAnonKey = getSupabaseAnonKey();
+
+    // 1) Try external Supabase Edge Function.
+    if (supabaseUrl && supabaseAnonKey) {
+      const fnUrl = `${supabaseUrl.replace(/\/$/, "")}/functions/v1/fetch-sitemap?url=${encodeURIComponent(
+        targetUrl.trim()
+      )}`;
+
+      try {
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 60000);
+
+        const resp = await fetch(fnUrl, {
+          method: "GET",
+          headers: {
+            apikey: supabaseAnonKey,
+            Authorization: `Bearer ${supabaseAnonKey}`,
+          },
+          signal: controller.signal,
+        });
+
+        const contentType = resp.headers.get("content-type") || "";
+        const text = await resp.text();
+        window.clearTimeout(timeoutId);
+
+        if (!resp.ok) {
+          throw new Error(`Supabase fetch-sitemap failed (${resp.status}): ${text.slice(0, 200)}`);
+        }
+
+        if (contentType.includes("application/json")) {
+          try {
+            const json = JSON.parse(text);
+            return json?.content ?? text;
+          } catch {
+            return text;
+          }
+        }
+
+        return text;
+      } catch (e) {
+        console.warn("[Sitemap] Supabase fetch-sitemap failed; falling back to /api proxy", e);
+      }
+    }
+
+    // 2) Fallback: same-origin proxy.
+    const proxyUrl = `/api/fetch-sitemap?url=${encodeURIComponent(targetUrl.trim())}`;
+    const proxyResp = await fetch(proxyUrl, { method: "GET" });
+    const proxyText = await proxyResp.text();
+    if (!proxyResp.ok) {
+      throw new Error(`Proxy fetch-sitemap failed (${proxyResp.status}): ${proxyText.slice(0, 200)}`);
+    }
+    return proxyText;
+  };
 
   const handleGenerateContentPlan = () => {
     if (!broadTopic.trim()) return;
@@ -89,110 +149,43 @@ export function ContentStrategy() {
   const handleCrawlSitemap = async () => {
     if (!sitemapUrl.trim()) return;
 
+    const runId = (crawlRunIdRef.current += 1);
     setIsCrawling(true);
     setCrawledUrls([]);
+    setCrawlFoundCount(0);
+    setCrawlStatus("Starting…");
 
     try {
-      let xmlText: string;
-
-      const supabaseUrl = getSupabaseUrl();
-      const supabaseAnonKey = getSupabaseAnonKey();
-
-      // Prefer calling the Supabase Edge Function directly.
-      // This avoids supabase-js adding extra headers that can break CORS if the function's
-      // Access-Control-Allow-Headers isn't exhaustive.
-      if (supabaseUrl && supabaseAnonKey) {
-        const fnUrl = `${supabaseUrl.replace(/\/$/, "")}/functions/v1/fetch-sitemap?url=${encodeURIComponent(
-          sitemapUrl.trim()
-        )}`;
-
-        console.log("[Sitemap] Fetching via Supabase Edge Function:", fnUrl);
-
-        let respText = "";
-        try {
-          const resp = await fetch(fnUrl, {
-            method: "GET",
-            headers: {
-              apikey: supabaseAnonKey,
-              Authorization: `Bearer ${supabaseAnonKey}`,
-            },
+      const allUrls = await crawlSitemapUrls(sitemapUrl.trim(), fetchSitemapText, {
+        concurrency: 10,
+        onProgress: (p) => {
+          if (crawlRunIdRef.current !== runId) return;
+          setCrawlFoundCount(p.discoveredUrls);
+          setCrawlStatus(
+            `Sitemaps: ${p.processedSitemaps} done • ${p.queuedSitemaps} queued • URLs: ${p.discoveredUrls}`
+          );
+        },
+        onUrlsBatch: (batch) => {
+          if (crawlRunIdRef.current !== runId) return;
+          setCrawledUrls((prev) => {
+            if (prev.length >= 50) return prev;
+            const merged = [...prev, ...batch];
+            return Array.from(new Set(merged)).slice(0, 50);
           });
-
-          respText = await resp.text();
-
-          if (!resp.ok) {
-            if (resp.status === 404) {
-              throw new Error(
-                "Supabase Edge Function 'fetch-sitemap' is not deployed in your Supabase project."
-              );
-            }
-            throw new Error(
-              `Supabase fetch-sitemap failed (${resp.status}): ${respText.slice(0, 200)}`
-            );
-          }
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          // If this is a browser-level failure, it's almost always CORS or a missing function.
-          if (msg.toLowerCase().includes("failed to fetch")) {
-            throw new Error(
-              "Failed to reach Supabase Edge Function fetch-sitemap (CORS or not deployed)."
-            );
-          }
-          throw e;
-        }
-
-        // If the function returned JSON, extract 'content'; otherwise treat response as raw XML/text.
-        try {
-          const maybeJson = JSON.parse(respText);
-          xmlText = maybeJson?.content ?? maybeJson;
-        } catch {
-          xmlText = respText;
-        }
-      } else {
-        // Try Cloudflare proxy
-        console.log("[Sitemap] Trying Cloudflare proxy");
-        const response = await fetch("/api/fetch-sitemap", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: sitemapUrl.trim() }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Proxy returned ${response.status}`);
-        }
-
-        const data = await response.json();
-        xmlText = data?.content || await response.text();
-      }
-
-      // Parse XML to extract URLs
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
-      
-      // Check for parsing errors
-      const parseError = xmlDoc.querySelector("parsererror");
-      if (parseError) {
-        throw new Error("Invalid XML format in sitemap");
-      }
-
-      // Extract all <loc> elements (works for both sitemap index and regular sitemaps)
-      const locElements = xmlDoc.querySelectorAll("loc");
-      const urls: string[] = [];
-      
-      locElements.forEach((loc) => {
-        const url = loc.textContent?.trim();
-        if (url) {
-          urls.push(url);
-        }
+        },
       });
 
-      if (urls.length === 0) {
-        throw new Error("No URLs found in sitemap");
+      if (allUrls.length === 0) {
+        throw new Error("No page URLs found in sitemap");
       }
 
-      setCrawledUrls(urls);
-      setSitemapUrls(urls);
-      toast.success(`Found ${urls.length} URLs in sitemap!`);
+      if (crawlRunIdRef.current !== runId) return;
+
+      setCrawledUrls(allUrls);
+      setSitemapUrls(allUrls);
+      setCrawlFoundCount(allUrls.length);
+      setCrawlStatus(`Done • ${allUrls.length.toLocaleString()} URLs`);
+      toast.success(`Found ${allUrls.length} URLs across sitemap(s)!`);
     } catch (error) {
       console.error("[Sitemap] Crawl error:", error);
       toast.error(error instanceof Error ? error.message : "Failed to crawl sitemap");
@@ -529,7 +522,7 @@ export function ContentStrategy() {
               {isCrawling ? (
                 <>
                   <Loader2 className="w-5 h-5 animate-spin" />
-                  Crawling...
+                  Crawling… ({crawlFoundCount.toLocaleString()} URLs)
                 </>
               ) : (
                 <>
@@ -539,12 +532,16 @@ export function ContentStrategy() {
               )}
             </button>
 
+            {isCrawling && crawlStatus && (
+              <div className="text-xs text-muted-foreground">{crawlStatus}</div>
+            )}
+
             {/* Show crawled URLs */}
-            {crawledUrls.length > 0 && (
+            {(crawledUrls.length > 0 || crawlFoundCount > 0) && (
               <div className="mt-4 p-4 bg-muted/50 rounded-xl">
                 <div className="flex items-center justify-between mb-2">
                   <h4 className="font-medium text-foreground">
-                    ✅ Found {crawledUrls.length} URLs
+                    ✅ Found {(crawlFoundCount || crawledUrls.length).toLocaleString()} URLs
                   </h4>
                 </div>
                 <div className="max-h-48 overflow-y-auto space-y-1">
@@ -553,9 +550,9 @@ export function ContentStrategy() {
                       {url}
                     </div>
                   ))}
-                  {crawledUrls.length > 50 && (
+                  {(crawlFoundCount || crawledUrls.length) > 50 && (
                     <div className="text-sm text-muted-foreground italic">
-                      ... and {crawledUrls.length - 50} more
+                      ... and {((crawlFoundCount || crawledUrls.length) - 50).toLocaleString()} more
                     </div>
                   )}
                 </div>
