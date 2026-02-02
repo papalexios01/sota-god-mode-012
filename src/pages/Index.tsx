@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { Zap, Sparkles, LayoutGrid, Shield } from "lucide-react";
+import { OptimizerDashboard } from "@/components/optimizer/OptimizerDashboard";
 
 const features = [
   {
@@ -24,6 +26,12 @@ const features = [
 ];
 
 const Index = () => {
+  const [showOptimizer, setShowOptimizer] = useState(false);
+
+  if (showOptimizer) {
+    return <OptimizerDashboard />;
+  }
+
   return (
     <div className="min-h-screen gradient-bg">
       {/* Header */}
@@ -62,7 +70,10 @@ const Index = () => {
 
           {/* CTA Buttons */}
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <button className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-primary text-primary-foreground font-semibold rounded-full hover:bg-primary/90 transition-colors">
+            <button 
+              onClick={() => setShowOptimizer(true)}
+              className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-primary text-primary-foreground font-semibold rounded-full hover:bg-primary/90 transition-colors"
+            >
               <Zap className="w-5 h-5" />
               Launch Optimizer
             </button>
