@@ -93,9 +93,17 @@ export function useGodModeEngine() {
    * Start the God Mode engine
    */
   const start = useCallback(async (customConfig?: Partial<GodModeConfig>) => {
-    // Validate prerequisites
-    if (sitemapUrls.length === 0 && priorityUrls.length === 0 && !priorityOnlyMode) {
-      throw new Error('No URLs available. Please crawl a sitemap first or add priority URLs.');
+    // ===== PRIORITY ONLY MODE VALIDATION =====
+    if (priorityOnlyMode) {
+      if (priorityUrls.length === 0) {
+        throw new Error('🎯 Priority Only Mode requires URLs in your Priority Queue. Please add priority URLs first, or disable Priority Only Mode to use sitemap scanning.');
+      }
+      console.log(`[GodMode] 🎯 Priority Only Mode: ${priorityUrls.length} priority URLs will be processed`);
+    } else {
+      // Full sitemap mode validation
+      if (sitemapUrls.length === 0 && priorityUrls.length === 0) {
+        throw new Error('No URLs available. Please crawl a sitemap first or add priority URLs.');
+      }
     }
 
     const hasApiKey = appConfig.geminiApiKey || appConfig.openaiApiKey || 
@@ -116,6 +124,8 @@ export function useGodModeEngine() {
       ...godModeState.config,
       ...customConfig,
     };
+
+    console.log(`[GodMode] Starting engine - Mode: ${priorityOnlyMode ? '🎯 PRIORITY ONLY' : '🌐 FULL SITEMAP'}`);
 
     engineRef.current = new GodModeEngine({
       config,

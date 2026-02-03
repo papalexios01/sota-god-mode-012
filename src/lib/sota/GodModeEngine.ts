@@ -74,13 +74,24 @@ export class GodModeEngine {
       return;
     }
 
+    // ===== PRIORITY ONLY MODE VALIDATION =====
+    if (this.options.priorityOnlyMode) {
+      if (this.options.priorityUrls.length === 0) {
+        throw new Error('Priority Only Mode requires at least one URL in the Priority Queue. Add URLs to your priority queue first.');
+      }
+      this.log('info', '🎯 PRIORITY ONLY MODE ENABLED', 
+        `Processing ONLY ${this.options.priorityUrls.length} priority URLs. Sitemap scanning is DISABLED.`);
+    }
+
     this.isRunning = true;
     this.isPaused = false;
     this.abortController = new AbortController();
     this.processedToday = 0;
     this.cycleCount = 0;
 
-    this.log('success', '🚀 GOD MODE 2.0 ACTIVATED', 'Autonomous SEO maintenance engine is now running');
+    const modeLabel = this.options.priorityOnlyMode ? '🎯 PRIORITY ONLY' : '🌐 FULL SITEMAP';
+    this.log('success', '🚀 GOD MODE 2.0 ACTIVATED', `Mode: ${modeLabel} | Autonomous SEO engine is now running`);
+    
     this.updateState({
       status: 'running',
       stats: {
@@ -89,7 +100,7 @@ export class GodModeEngine {
         errorCount: 0,
         avgQualityScore: 0,
         lastScanAt: null,
-        nextScanAt: this.calculateNextScan(),
+        nextScanAt: this.options.priorityOnlyMode ? null : this.calculateNextScan(),
         totalWordsGenerated: 0,
         sessionStartedAt: new Date(),
         cycleCount: 0,
@@ -99,8 +110,46 @@ export class GodModeEngine {
     // Initialize orchestrator
     this.initializeOrchestrator();
 
+    // ===== PRIORITY ONLY MODE: Pre-populate queue =====
+    if (this.options.priorityOnlyMode) {
+      this.initializePriorityQueue();
+    }
+
     // Start the main loop
     await this.mainLoop();
+  }
+
+  /**
+   * Initialize queue directly from priority URLs (Priority Only Mode)
+   */
+  private initializePriorityQueue(): void {
+    this.queue = [];
+    
+    for (const priorityUrl of this.options.priorityUrls) {
+      // Skip excluded URLs
+      if (this.isExcluded(priorityUrl.url)) {
+        this.log('info', `⏭️ Skipped (excluded): ${this.getSlug(priorityUrl.url)}`);
+        continue;
+      }
+
+      this.queue.push({
+        id: crypto.randomUUID(),
+        url: priorityUrl.url,
+        priority: priorityUrl.priority,
+        healthScore: 0, // Will be scored during processing
+        addedAt: new Date(),
+        source: 'manual',
+        retryCount: 0,
+      });
+    }
+
+    // Sort by priority
+    this.sortQueue();
+    
+    this.updateState({ queue: this.queue });
+    
+    this.log('success', '🎯 Priority Queue Initialized', 
+      `${this.queue.length} URLs ready for processing (${this.options.priorityUrls.length - this.queue.length} excluded)`);
   }
 
   /**
@@ -173,22 +222,39 @@ export class GodModeEngine {
         this.cycleCount++;
         this.updateState({ stats: { ...this.getDefaultStats(), cycleCount: this.cycleCount } });
 
-        // PHASE 1: Sitemap Scan (if needed)
-        if (this.shouldScan()) {
-          await this.runScanPhase();
-        }
-
-        // PHASE 2: Health Scoring (if queue is empty)
-        if (this.queue.length === 0) {
-          await this.runScoringPhase();
-        }
-
-        // PHASE 3: Content Generation
-        if (this.queue.length > 0) {
-          await this.runGenerationPhase();
+        // ===== PRIORITY ONLY MODE: Simplified flow =====
+        if (this.options.priorityOnlyMode) {
+          // No sitemap scanning - go directly to generation
+          if (this.queue.length > 0) {
+            await this.runGenerationPhase();
+          } else {
+            this.log('success', '🎯 Priority Queue Complete', 
+              'All priority URLs have been processed. Add more URLs to continue or disable Priority Only Mode.');
+            // In Priority Only Mode, we're done when queue is empty
+            this.updateState({ status: 'idle', currentPhase: null });
+            this.stop();
+            return;
+          }
         } else {
-          this.log('info', '✨ Queue empty', 'All pages are healthy or excluded');
-          await this.sleep(this.options.config.processingIntervalMinutes * 60 * 1000);
+          // ===== FULL SITEMAP MODE: Complete flow =====
+          
+          // PHASE 1: Sitemap Scan (if needed)
+          if (this.shouldScan()) {
+            await this.runScanPhase();
+          }
+
+          // PHASE 2: Health Scoring (if queue is empty)
+          if (this.queue.length === 0) {
+            await this.runScoringPhase();
+          }
+
+          // PHASE 3: Content Generation
+          if (this.queue.length > 0) {
+            await this.runGenerationPhase();
+          } else {
+            this.log('info', '✨ Queue empty', 'All pages are healthy or excluded. Waiting for next scan cycle...');
+            await this.sleep(this.options.config.processingIntervalMinutes * 60 * 1000);
+          }
         }
 
       } catch (error) {
@@ -206,10 +272,12 @@ export class GodModeEngine {
 
   /**
    * Phase 1: Sitemap Scanning
+   * Note: This phase is SKIPPED in Priority Only Mode
    */
   private async runScanPhase(): Promise<void> {
+    // Double-check: This should never be called in Priority Only Mode
     if (this.options.priorityOnlyMode) {
-      this.log('info', '🎯 Priority Only Mode', 'Skipping sitemap scan, using priority queue only');
+      this.log('warning', '🎯 Priority Only Mode Active', 'Sitemap scan phase was unexpectedly called - skipping');
       return;
     }
 

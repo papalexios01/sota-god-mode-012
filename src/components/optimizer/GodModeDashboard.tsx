@@ -22,7 +22,7 @@ import { GodModeQueuePanel } from './GodModeQueuePanel';
 
 export function GodModeDashboard() {
   const { state, isRunning, isPaused, start, stop, pause, resume } = useGodModeEngine();
-  const { sitemapUrls, priorityUrls } = useOptimizerStore();
+  const { sitemapUrls, priorityUrls, priorityOnlyMode, setPriorityOnlyMode } = useOptimizerStore();
   const [showConfig, setShowConfig] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
 
@@ -79,6 +79,34 @@ export function GodModeDashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Priority Only Mode Banner */}
+      {priorityOnlyMode && (
+        <div className="bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-amber-500/10 border border-amber-500/40 rounded-2xl p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-amber-500/20 rounded-xl flex items-center justify-center">
+                <Target className="w-5 h-5 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-amber-300 flex items-center gap-2">
+                  🎯 Priority Only Mode ACTIVE
+                </h3>
+                <p className="text-sm text-amber-400/80">
+                  Engine will ONLY process {priorityUrls.length} URL{priorityUrls.length !== 1 ? 's' : ''} from your Priority Queue. Sitemap scanning is disabled.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setPriorityOnlyMode(false)}
+              disabled={isRunning}
+              className="px-4 py-2 bg-amber-500/20 text-amber-300 rounded-lg text-sm font-medium hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Switch to Full Sitemap Mode
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header Section */}
       <div className="bg-gradient-to-r from-primary/20 via-primary/10 to-transparent border border-primary/30 rounded-2xl p-6">
         <div className="flex items-center justify-between">
@@ -101,15 +129,34 @@ export function GodModeDashboard() {
                 )}>
                   {state.status}
                 </span>
+                {priorityOnlyMode && (
+                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-amber-500/20 text-amber-400">
+                    🎯 PRIORITY ONLY
+                  </span>
+                )}
               </h2>
               <p className="text-muted-foreground">
-                Autonomous SEO maintenance engine • {getPhaseLabel()}
+                {priorityOnlyMode 
+                  ? `🎯 Processing ${priorityUrls.length} priority URLs only`
+                  : `Autonomous SEO maintenance engine • ${getPhaseLabel()}`
+                }
               </p>
             </div>
           </div>
 
           {/* Control Buttons */}
           <div className="flex items-center gap-3">
+            {/* Priority Only Mode Toggle (when not running) */}
+            {!isRunning && !priorityOnlyMode && priorityUrls.length > 0 && (
+              <button
+                onClick={() => setPriorityOnlyMode(true)}
+                className="px-4 py-2 bg-amber-500/20 text-amber-400 rounded-xl text-sm font-medium hover:bg-amber-500/30 transition-colors flex items-center gap-2"
+              >
+                <Target className="w-4 h-4" />
+                Priority Only
+              </button>
+            )}
+
             <button
               onClick={() => setShowConfig(!showConfig)}
               className="p-3 bg-muted hover:bg-muted/80 rounded-xl transition-colors"
@@ -142,15 +189,17 @@ export function GodModeDashboard() {
             ) : (
               <button
                 onClick={handleStart}
-                disabled={isStarting || (sitemapUrls.length === 0 && priorityUrls.length === 0)}
+                disabled={isStarting || (priorityOnlyMode ? priorityUrls.length === 0 : (sitemapUrls.length === 0 && priorityUrls.length === 0))}
                 className="px-6 py-3 bg-primary text-primary-foreground rounded-xl font-semibold flex items-center gap-2 hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {isStarting ? (
                   <Loader2 className="w-5 h-5 animate-spin" />
+                ) : priorityOnlyMode ? (
+                  <Target className="w-5 h-5" />
                 ) : (
                   <Zap className="w-5 h-5" />
                 )}
-                {isStarting ? 'Starting...' : 'Start God Mode'}
+                {isStarting ? 'Starting...' : priorityOnlyMode ? `Process ${priorityUrls.length} Priority URLs` : 'Start God Mode'}
               </button>
             )}
           </div>
@@ -181,20 +230,20 @@ export function GodModeDashboard() {
           <div className="bg-background/50 rounded-xl p-4">
             <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
               <Clock className="w-4 h-4" />
-              Last Scan
+              {priorityOnlyMode ? 'Mode' : 'Last Scan'}
             </div>
             <div className="text-lg font-semibold text-foreground">
-              {formatTime(state.stats.lastScanAt)}
+              {priorityOnlyMode ? '🎯 Priority' : formatTime(state.stats.lastScanAt)}
             </div>
           </div>
           
           <div className="bg-background/50 rounded-xl p-4">
             <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
               <RefreshCw className="w-4 h-4" />
-              Next Scan
+              {priorityOnlyMode ? 'URLs Left' : 'Next Scan'}
             </div>
             <div className="text-lg font-semibold text-foreground">
-              {formatTime(state.stats.nextScanAt)}
+              {priorityOnlyMode ? `${state.queue.length} / ${priorityUrls.length}` : formatTime(state.stats.nextScanAt)}
             </div>
           </div>
         </div>
