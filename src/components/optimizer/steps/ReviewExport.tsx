@@ -211,6 +211,11 @@ export function ReviewExport() {
         // Store the generated content
         setGeneratedContents(prev => ({ ...prev, [item.id]: result }));
 
+        // Store NeuronWriter analysis (if available)
+        if (result.neuronWriterAnalysis) {
+          setNeuronDataStore(prev => ({ ...prev, [item.id]: result.neuronWriterAnalysis! }));
+        }
+
         updateContentItem(item.id, { 
           status: 'completed', 
           content: result.content,

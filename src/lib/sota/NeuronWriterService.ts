@@ -462,6 +462,7 @@ export class NeuronWriterService {
         content_score: c.content_score,
       })),
       recommended_length: data.metrics?.word_count?.target || 1500,
+      content_score: data.content_score,
     };
 
     return { success: true, analysis };

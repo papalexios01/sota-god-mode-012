@@ -26,6 +26,13 @@ import { SchemaGenerator, createSchemaGenerator } from './SchemaGenerator';
 import { calculateQualityScore, analyzeContent, removeAIPhrases } from './QualityValidator';
 import { EEATValidator, createEEATValidator } from './EEATValidator';
 import { generationCache } from './cache';
+import { NeuronWriterService, createNeuronWriterService, type NeuronWriterAnalysis } from './NeuronWriterService';
+
+type NeuronBundle = {
+  service: NeuronWriterService;
+  queryId: string;
+  analysis: NeuronWriterAnalysis;
+};
 
 interface OrchestratorConfig {
   apiKeys: ExtendedAPIKeys;
@@ -90,6 +97,57 @@ export class EnterpriseContentOrchestrator {
     console.log(`[Orchestrator] ${message}`);
   }
 
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async maybeInitNeuronWriter(keyword: string, options: GenerationOptions): Promise<NeuronBundle | null> {
+    const apiKey = this.config.neuronWriterApiKey?.trim();
+    const projectId = this.config.neuronWriterProjectId?.trim();
+    if (!apiKey || !projectId) return null;
+
+    const service = createNeuronWriterService(apiKey);
+    const queryIdFromOptions = options.neuronWriterQueryId?.trim();
+
+    this.log('NeuronWriter: preparing query...');
+
+    let queryId = queryIdFromOptions;
+    if (!queryId) {
+      const created = await service.createQuery(projectId, keyword);
+      if (!created.success || !created.queryId) {
+        this.log(`NeuronWriter: failed to create query (${created.error || 'unknown error'})`);
+        return null;
+      }
+      queryId = created.queryId;
+    }
+
+    // Poll until ready (NeuronWriter analysis can take a bit)
+    const maxAttempts = 14;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const analysisRes = await service.getQueryAnalysis(queryId);
+      if (analysisRes.success && analysisRes.analysis) {
+        this.log(`NeuronWriter: analysis ready (terms: ${analysisRes.analysis.terms?.length || 0})`);
+        return { service, queryId, analysis: analysisRes.analysis };
+      }
+
+      const msg = analysisRes.error || 'Query not ready';
+      // If it's not-ready, retry; otherwise treat as hard failure.
+      const looksNotReady = /not ready|status/i.test(msg);
+      if (!looksNotReady) {
+        this.log(`NeuronWriter: analysis failed (${msg})`);
+        return null;
+      }
+
+      // Backoff: 2.5s → 5s
+      const delay = attempt <= 3 ? 2500 : 5000;
+      this.log(`NeuronWriter: waiting for analysis… (attempt ${attempt}/${maxAttempts})`);
+      await this.sleep(delay);
+    }
+
+    this.log('NeuronWriter: analysis timed out (still not ready)');
+    return null;
+  }
+
   async generateContent(options: GenerationOptions): Promise<GeneratedContent> {
     this.onProgress = options.onProgress;
     const startTime = Date.now();
@@ -98,14 +156,15 @@ export class EnterpriseContentOrchestrator {
 
     // Phase 1: Parallel Research
     this.log('Phase 1: Research & Analysis...');
-    const [serpAnalysis, videos, references] = await Promise.all([
+    const [serpAnalysis, videos, references, neuron] = await Promise.all([
       this.serpAnalyzer.analyze(options.keyword, this.config.targetCountry),
       options.includeVideos !== false 
         ? this.youtubeService.getRelevantVideos(options.keyword, options.contentType)
         : Promise.resolve([]),
       options.includeReferences !== false
         ? this.referenceService.getTopReferences(options.keyword)
-        : Promise.resolve([])
+        : Promise.resolve([]),
+      this.maybeInitNeuronWriter(options.keyword, options),
     ]);
 
     this.log(`Found ${videos.length} videos, ${references.length} references`);
@@ -113,14 +172,30 @@ export class EnterpriseContentOrchestrator {
 
     // Phase 2: Content Generation
     this.log('Phase 2: AI Content Generation...');
+
+    // Prefer NeuronWriter recommended length when available
+    const targetWordCount =
+      options.targetWordCount ||
+      neuron?.analysis?.recommended_length ||
+      serpAnalysis.recommendedWordCount ||
+      2500;
+
+    const genOptions: GenerationOptions = { ...options, targetWordCount };
+
     const title = options.title || await this.generateTitle(options.keyword, serpAnalysis);
+
+    const neuronTermPrompt = neuron
+      ? neuron.service.formatTermsForPrompt(neuron.analysis.terms || [])
+      : undefined;
+
     const content = await this.generateMainContent(
       options.keyword,
       title,
       serpAnalysis,
       videos,
       references,
-      options
+      genOptions,
+      neuronTermPrompt
     );
 
     // Phase 3: Enhancement
@@ -151,6 +226,28 @@ export class EnterpriseContentOrchestrator {
       }
     } else {
       this.log('⚠️ No site pages available for internal linking - crawl sitemap first');
+    }
+
+    // NeuronWriter content score (after links/cleanup so the score reflects what you'll publish)
+    if (neuron) {
+      this.log('NeuronWriter: evaluating content score...');
+      const evalRes = await neuron.service.evaluateContent(neuron.queryId, {
+        html: enhancedContent,
+        title,
+      });
+
+      if (evalRes.success && typeof evalRes.contentScore === 'number') {
+        neuron.analysis.content_score = evalRes.contentScore;
+      } else {
+        // Fallback: local approximation
+        neuron.analysis.content_score = neuron.service.calculateContentScore(
+          enhancedContent,
+          neuron.analysis.terms || []
+        );
+        if (!evalRes.success) {
+          this.log(`NeuronWriter: evaluate failed (using local score). ${evalRes.error || ''}`.trim());
+        }
+      }
     }
 
     // Phase 4: Validation (parallel quality + E-E-A-T)
@@ -214,7 +311,10 @@ export class EnterpriseContentOrchestrator {
       serpAnalysis,
       generatedAt: new Date(),
       model: this.config.primaryModel || 'gemini',
-      consensusUsed: this.config.useConsensus || false
+      consensusUsed: this.config.useConsensus || false,
+
+      neuronWriterQueryId: neuron?.queryId,
+      neuronWriterAnalysis: neuron?.analysis,
     };
 
     const duration = Date.now() - startTime;
@@ -256,7 +356,8 @@ Output ONLY the title, nothing else.`;
     serpAnalysis: SERPAnalysis,
     videos: YouTubeVideo[],
     references: Reference[],
-    options: GenerationOptions
+    options: GenerationOptions,
+    neuronTermPrompt?: string
   ): Promise<string> {
     const targetWordCount = options.targetWordCount || serpAnalysis.recommendedWordCount || 2500;
     
@@ -385,6 +486,16 @@ ${serpAnalysis.contentGaps.slice(0, 6).join('\n')}
 
 SEMANTIC KEYWORDS TO NATURALLY WEAVE IN (don't force them):
 ${serpAnalysis.semanticEntities.slice(0, 18).join(', ')}
+
+${neuronTermPrompt ? `
+NEURONWRITER OPTIMIZATION TARGETS (MUST FOLLOW):
+${neuronTermPrompt}
+
+Rules:
+- Include EVERY required term at least the minimum suggested frequency.
+- Include as many recommended terms as feels natural (aim for 10+).
+- Never dump the terms as a list—blend them into real sentences.
+` : ''}
 
 ${videos.length > 0 ? `
 EMBED THIS VIDEO IN THE MIDDLE OF THE ARTICLE:

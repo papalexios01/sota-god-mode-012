@@ -32,6 +32,7 @@ interface PageTopic {
 export class SOTAInternalLinkEngine {
   private sitePages: SitePage[];
   private stopWords: Set<string>;
+  private genericTokens: Set<string>;
 
   // Precomputed index for fast, high-quality matching
   private pageTopics: PageTopic[] = [];
@@ -51,8 +52,33 @@ export class SOTAInternalLinkEngine {
       'than', 'too', 'very', 'just', 'also', 'now', 'here', 'there', 'then'
     ]);
 
+    // Tokens that commonly create *false* relevance matches ("per", time units, listicle words, etc.)
+    // We don't want these to drive link selection.
+    this.genericTokens = new Set([
+      'per', 'vs', 'versus',
+      'day', 'days', 'week', 'weeks', 'month', 'months', 'year', 'years',
+      'minute', 'minutes', 'hour', 'hours', 'second', 'seconds',
+      'session', 'sessions',
+      'price', 'prices', 'cost', 'costs',
+      'how', 'what', 'why', 'when', 'where',
+      'best', 'top', 'guide', 'tips', 'review', 'reviews', 'ultimate', 'complete',
+      'benefit', 'benefits',
+    ]);
+
     this.sitePages = sitePages;
     this.rebuildIndex();
+  }
+
+  private isNumericToken(token: string): boolean {
+    return /^\d+$/.test(token);
+  }
+
+  private isMeaningfulToken(token: string): boolean {
+    if (!token) return false;
+    if (this.isNumericToken(token)) return false;
+    if (this.stopWords.has(token)) return false;
+    if (this.genericTokens.has(token)) return false;
+    return token.length > 2;
   }
 
   updateSitePages(pages: SitePage[]): void {
@@ -141,21 +167,32 @@ export class SOTAInternalLinkEngine {
           if (!this.isValidAnchor(anchor)) continue;
 
           // Only consider pages that share at least one non-generic token with the anchor
-          const anchorTokens = span.map(t => t.token);
-          const pageHitCounts = this.getCandidatePageHitCounts(anchorTokens);
+          const rawAnchorTokens = span.map(t => t.token);
+          const meaningfulAnchorTokens = rawAnchorTokens.filter(t => this.isMeaningfulToken(t));
+          if (meaningfulAnchorTokens.length < 3) continue;
+
+          const pageHitCounts = this.getCandidatePageHitCounts(meaningfulAnchorTokens);
           if (pageHitCounts.size === 0) continue;
 
           for (const [pageIdx, overlapCount] of pageHitCounts) {
             const topic = this.pageTopics[pageIdx];
             if (!topic) continue;
 
-            const titleRun = this.longestContiguousRun(anchorTokens, topic.titleTokens);
-            const hasSpecificToken = anchorTokens.some(t => (this.tokenIdf.get(t) ?? 0) >= 1.55);
+            const overlapMeaningful = meaningfulAnchorTokens.filter(t => topic.tokenSet.has(t));
+            const overlapMeaningfulCount = overlapMeaningful.length;
+            const titleRun = this.longestContiguousRun(meaningfulAnchorTokens, topic.titleTokens);
+            const hasSpecificToken = overlapMeaningful.some(t => (this.tokenIdf.get(t) ?? 0) >= 1.55);
 
             // Quality gates: avoid "best" matching everything.
-            if (overlapCount < 2 && titleRun < 2 && !hasSpecificToken) continue;
+            if (overlapMeaningfulCount < 2 && titleRun < 2 && !hasSpecificToken) continue;
 
-            const score = this.scoreAnchorForTopic(anchorTokens, topic, overlapCount, titleRun);
+            const score = this.scoreAnchorForTopic(
+              meaningfulAnchorTokens,
+              rawAnchorTokens.length,
+              topic,
+              overlapMeaningfulCount,
+              titleRun
+            );
             if (score < 70) continue;
 
             const startIndex = span[0].startIndex;
@@ -208,8 +245,11 @@ export class SOTAInternalLinkEngine {
     if (!first || !last) return false;
     if (this.stopWords.has(first) || this.stopWords.has(last)) return false;
 
-    // At least 3 meaningful words (not stop words)
-    const meaningfulWords = words.filter(w => w.length > 2 && !this.stopWords.has(w.toLowerCase()));
+    // At least 3 meaningful alpha-words (prevents anchors driven by numbers/"per"/time units)
+    const meaningfulWords = words.filter(w => {
+      const t = w.toLowerCase();
+      return /[a-z]/i.test(w) && this.isMeaningfulToken(t);
+    });
     if (meaningfulWords.length < 3) return false;
 
     // Ban obvious junk anchors
@@ -230,7 +270,8 @@ export class SOTAInternalLinkEngine {
   }
 
   private scoreAnchorForTopic(
-    anchorTokens: string[],
+    meaningfulAnchorTokens: string[],
+    rawWordCount: number,
     topic: PageTopic,
     overlapCount: number,
     titleRun: number
@@ -238,7 +279,7 @@ export class SOTAInternalLinkEngine {
     let score = 0;
 
     // Token overlap (IDF-weighted) = relevance
-    const overlap = anchorTokens.filter(t => topic.tokenSet.has(t));
+    const overlap = meaningfulAnchorTokens.filter(t => topic.tokenSet.has(t));
     const overlapScore = overlap.reduce((sum, t) => sum + ((this.tokenIdf.get(t) ?? 0) * 22), 0);
     score += overlapScore;
 
@@ -250,18 +291,18 @@ export class SOTAInternalLinkEngine {
     if (overlapCount >= 4) score += 10;
 
     // 4–5 words tends to read like a natural anchor
-    const wc = anchorTokens.length;
+    const wc = rawWordCount;
     if (wc === 4 || wc === 5) score += 8;
 
     // Penalize anchors full of generic filler/pronouns
     const badTokens = new Set(['this', 'that', 'these', 'those', 'your', 'you', 'we', 'they', 'it', 'our', 'my']);
-    const badCount = anchorTokens.filter(t => badTokens.has(t)).length;
+    const badCount = meaningfulAnchorTokens.filter(t => badTokens.has(t)).length;
     score -= badCount * 14;
 
     // Penalize if anchor begins/ends with generic words (even if valid)
     const generic = new Set(['best', 'top', 'guide', 'tips', 'review', 'reviews', 'comparison', 'comparisons', 'ultimate', 'complete']);
-    const first = anchorTokens[0];
-    const last = anchorTokens[anchorTokens.length - 1];
+    const first = meaningfulAnchorTokens[0];
+    const last = meaningfulAnchorTokens[meaningfulAnchorTokens.length - 1];
     if (generic.has(first) || generic.has(last)) score -= 12;
 
     // Normalize to 0..100
@@ -276,7 +317,7 @@ export class SOTAInternalLinkEngine {
     return title
       .toLowerCase()
       .split(/[\s\-_:,|]+/)
-      .filter(w => w.length > 3 && !this.stopWords.has(w))
+      .filter(w => this.isMeaningfulToken(w) && w.length > 3)
       .slice(0, 12);
   }
 
@@ -290,7 +331,7 @@ export class SOTAInternalLinkEngine {
       const words = segments.flatMap(seg => seg.split(/[\-_]+/));
       return words
         .map(w => w.toLowerCase())
-        .filter(w => w.length > 3 && !this.stopWords.has(w));
+        .filter(w => this.isMeaningfulToken(w) && w.length > 3);
     } catch {
       return [];
     }
@@ -391,7 +432,7 @@ export class SOTAInternalLinkEngine {
     const pageTokens: Array<{ titleTokens: string[]; tokens: string[] }> = this.sitePages.map(p => {
       const titleTokens = this.tokenizeSimple(p.title)
         .map(t => t.toLowerCase())
-        .filter(t => t.length > 2 && !this.stopWords.has(t));
+        .filter(t => this.isMeaningfulToken(t));
 
       const tokens = this.extractTopicTokens(p);
       return { titleTokens, tokens };
@@ -434,8 +475,7 @@ export class SOTAInternalLinkEngine {
       .map(t => t.toLowerCase())
       .map(t => t.replace(/[^a-z0-9']+/gi, ''))
       .filter(Boolean)
-      .filter(t => t.length > 2)
-      .filter(t => !this.stopWords.has(t));
+      .filter(t => this.isMeaningfulToken(t));
 
     return Array.from(new Set(combined));
   }
@@ -480,13 +520,13 @@ export class SOTAInternalLinkEngine {
 
     // Only use reasonably-specific tokens to seed candidates (prevents "best" from matching everything)
     const seedTokens = anchorTokens.filter(t => {
-      if (this.stopWords.has(t)) return false;
+      if (!this.isMeaningfulToken(t)) return false;
       const df = this.tokenDf.get(t) ?? 0;
       const ratio = df / totalPages;
       return (this.tokenIdf.get(t) ?? 0) >= 1.25 && ratio <= 0.22;
     });
 
-    const tokensToUse = seedTokens.length > 0 ? seedTokens : anchorTokens.filter(t => !this.stopWords.has(t));
+    const tokensToUse = seedTokens.length > 0 ? seedTokens : anchorTokens.filter(t => this.isMeaningfulToken(t));
     if (tokensToUse.length === 0) return hitCounts;
 
     for (const t of tokensToUse) {
