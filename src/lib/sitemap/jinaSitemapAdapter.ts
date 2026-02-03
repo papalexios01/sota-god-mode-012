@@ -7,6 +7,40 @@ function escapeXml(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
+const ISO_LASTMOD_SEGMENT_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Jina sometimes “flattens” `<loc>.../</loc><lastmod>2025-..</lastmod>` into a single token like:
+ *   https://example.com/post-slug/2025-01-01T12:34:56+00:00
+ * That URL usually 404s. Strip the trailing ISO timestamp segment when detected.
+ */
+function stripFlattenedLastmodSuffix(url: string): string {
+  try {
+    const u = new URL(url);
+    const segments = u.pathname.split("/").filter(Boolean);
+    if (segments.length === 0) return url;
+
+    const last = segments[segments.length - 1] ?? "";
+    let decoded = last;
+    try {
+      decoded = decodeURIComponent(last);
+    } catch {
+      // ignore
+    }
+
+    if (!ISO_LASTMOD_SEGMENT_RE.test(decoded)) return url;
+
+    segments.pop();
+    // Preserve trailing slash if the original had one.
+    const hadTrailingSlash = u.pathname.endsWith("/");
+    u.pathname = `/${segments.join("/")}${hadTrailingSlash ? "/" : ""}`;
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 function extractHttpUrls(raw: string, max: number): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -14,7 +48,8 @@ function extractHttpUrls(raw: string, max: number): string[] {
   // Broad URL matcher; good for Jina “Markdown Content” output.
   const re = /https?:\/\/[^\s<>()\[\]"']+/gi;
   for (const m of raw.matchAll(re)) {
-    const u = (m[0] || "").trim().replace(/[),.;]+$/g, "");
+    const rawUrl = (m[0] || "").trim().replace(/[),.;]+$/g, "");
+    const u = stripFlattenedLastmodSuffix(rawUrl);
     if (!u) continue;
     if (seen.has(u)) continue;
     seen.add(u);

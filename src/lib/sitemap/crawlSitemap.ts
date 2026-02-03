@@ -24,6 +24,50 @@ function normalizeUrl(input: string): string {
   return `https://${trimmed}`;
 }
 
+const ISO_LASTMOD_SEGMENT_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function stripFlattenedLastmodSuffix(url: string): string {
+  try {
+    const u = new URL(url);
+    const segments = u.pathname.split("/").filter(Boolean);
+    if (segments.length === 0) return url;
+
+    const last = segments[segments.length - 1] ?? "";
+    let decoded = last;
+    try {
+      decoded = decodeURIComponent(last);
+    } catch {
+      // ignore
+    }
+
+    if (!ISO_LASTMOD_SEGMENT_RE.test(decoded)) return url;
+    segments.pop();
+    const hadTrailingSlash = u.pathname.endsWith("/");
+    u.pathname = `/${segments.join("/")}${hadTrailingSlash ? "/" : ""}`;
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+/** Extracts http(s) URLs from arbitrary text (e.g. Jina markdown or HTML shells). */
+function extractHttpUrlsFromText(raw: string, max: number): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const re = /https?:\/\/[^\s<>()\[\]"']+/gi;
+  for (const m of raw.matchAll(re)) {
+    const rawUrl = (m[0] || "").trim().replace(/[),.;]+$/g, "");
+    const u = stripFlattenedLastmodSuffix(rawUrl);
+    if (!u) continue;
+    if (seen.has(u)) continue;
+    seen.add(u);
+    out.push(u);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 function extractSitemapXmlPayload(raw: string): string {
   // Some WordPress setups serve the sitemap XML inside an HTML shell:
   // <html><body><urlset ...>...</urlset></body></html>
@@ -211,9 +255,64 @@ export async function crawlSitemapUrls(
             "Sitemap fetch",
             () => perFetchController.abort()
           );
-          const xmlDoc = safeParseXml(rawText);
-          const kind = getSitemapKind(xmlDoc);
-          const locs = extractLocs(xmlDoc, rawText);
+          let xmlDoc: XMLDocument | null = null;
+          let kind: "index" | "urlset" | "unknown" = "unknown";
+          let locs: string[] = [];
+
+          try {
+            xmlDoc = safeParseXml(rawText);
+            kind = getSitemapKind(xmlDoc);
+            locs = extractLocs(xmlDoc, rawText);
+          } catch {
+            // Fallback for non-XML “sitemaps” (e.g. Jina markdown, HTML wrappers, WAF blocks).
+            // This prevents false “0 URLs found” when URLs are actually present.
+            locs = extractHttpUrlsFromText(rawText, 200_000);
+
+            // If we still have nothing, rethrow so this sitemap is treated as failed.
+            if (locs.length === 0) throw new Error("Invalid XML format in sitemap");
+
+            // Heuristic: if this looks like an index sitemap, queue discovered .xml links.
+            const indexLike = (() => {
+              try {
+                const path = new URL(sitemap).pathname.toLowerCase();
+                return (
+                  path === "/sitemap.xml" ||
+                  path === "/wp-sitemap.xml" ||
+                  path.endsWith("/sitemap_index.xml") ||
+                  path.endsWith("sitemap_index.xml")
+                );
+              } catch {
+                return /sitemap/i.test(sitemap);
+              }
+            })();
+
+            const xmlLinks = locs.filter((u) => /(?:^|\/)[^\s?#]+\.xml(?:$|[?#])/i.test(u));
+            if (indexLike && xmlLinks.length > 0) {
+              for (const loc of xmlLinks) {
+                if (visitedSitemaps.has(loc)) continue;
+                if (isLowValueSitemap(loc)) continue;
+                pending.push(loc);
+              }
+              return;
+            }
+
+            // Default: treat as a urlset.
+            const newlyAdded: string[] = [];
+            for (const loc of locs) {
+              if (discoveredUrls.size >= maxUrls) break;
+              if (!loc.startsWith("http://") && !loc.startsWith("https://")) continue;
+              if (discoveredUrls.has(loc)) continue;
+              discoveredUrls.add(loc);
+              newlyAdded.push(loc);
+            }
+            if (newlyAdded.length) options.onUrlsBatch?.(newlyAdded);
+            return;
+          }
+
+          // If XML parsed but loc extraction produced nothing (rare), fall back to broad URL extraction.
+          if (locs.length === 0) {
+            locs = extractHttpUrlsFromText(rawText, 200_000);
+          }
 
           if (kind === "index") {
             // ✅ Enterprise performance: prioritize likely post/blog sitemaps and skip obviously irrelevant ones
