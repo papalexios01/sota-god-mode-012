@@ -147,31 +147,39 @@ export async function crawlSitemapUrls(
       batch.map(async (sitemap) => {
         emitProgress(sitemap);
 
-        const rawText = await fetchSitemapXml(sitemap);
-        const xmlDoc = safeParseXml(rawText);
-        const kind = getSitemapKind(xmlDoc);
-        const locs = extractLocs(xmlDoc, rawText);
+        try {
+          const rawText = await fetchSitemapXml(sitemap);
+          const xmlDoc = safeParseXml(rawText);
+          const kind = getSitemapKind(xmlDoc);
+          const locs = extractLocs(xmlDoc, rawText);
 
-        if (kind === "index") {
-          for (const loc of locs) {
-            if (visitedSitemaps.has(loc)) continue;
-            pending.push(loc);
+          if (kind === "index") {
+            for (const loc of locs) {
+              if (visitedSitemaps.has(loc)) continue;
+              pending.push(loc);
+            }
+          } else {
+            const newlyAdded: string[] = [];
+            for (const loc of locs) {
+              if (discoveredUrls.size >= maxUrls) break;
+              if (discoveredUrls.has(loc)) continue;
+              discoveredUrls.add(loc);
+              newlyAdded.push(loc);
+            }
+            if (newlyAdded.length) {
+              options.onUrlsBatch?.(newlyAdded);
+            }
           }
-        } else {
-          const newlyAdded: string[] = [];
-          for (const loc of locs) {
-            if (discoveredUrls.size >= maxUrls) break;
-            if (discoveredUrls.has(loc)) continue;
-            discoveredUrls.add(loc);
-            newlyAdded.push(loc);
-          }
-          if (newlyAdded.length) {
-            options.onUrlsBatch?.(newlyAdded);
-          }
+        } catch (err) {
+          // ✅ Enterprise robustness: one failing sitemap should not crash the entire crawl.
+          // We mark it processed and continue with the rest of the queue.
+          const msg = err instanceof Error ? err.message : String(err);
+          // eslint-disable-next-line no-console
+          console.warn("[Sitemap Crawl] Failed sitemap:", sitemap, msg);
+        } finally {
+          processedSitemaps += 1;
+          emitProgress();
         }
-
-        processedSitemaps += 1;
-        emitProgress();
       })
     );
   }
