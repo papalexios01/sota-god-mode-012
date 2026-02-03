@@ -350,7 +350,9 @@ export function ContentStrategy() {
       const crawlOptions = {
         // Lower concurrency improves reliability when a site has many child sitemaps or slow generation.
         concurrency: 4,
-        fetchTimeoutMs: 70000,
+         // Yoast/WordPress can take a long time to render and transfer large sitemap XML.
+         // Keep this aligned with the /api/fetch-sitemap proxy timeout.
+         fetchTimeoutMs: 100000,
         signal,
         onProgress: (p: SitemapCrawlProgress) => {
           if (crawlRunIdRef.current !== runId) return;

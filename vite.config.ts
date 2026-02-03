@@ -53,7 +53,9 @@ function devFetchSitemapPlugin(): Plugin {
           }
 
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 55000);
+          // Large WordPress sitemaps can take >55s to generate/transfer.
+          // Give them more runway in dev/preview.
+          const timeoutId = setTimeout(() => controller.abort(), 90000);
 
           const upstream = await fetch(parsed.toString(), {
             method: 'GET',

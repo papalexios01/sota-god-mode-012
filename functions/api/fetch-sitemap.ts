@@ -8,7 +8,7 @@ const corsHeaders = {
 
 async function fetchWithTimeout(
   url: string,
-  timeout: number = 55000
+  timeout: number = 90000
 ): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -60,7 +60,7 @@ export const onRequest: PagesFunction = async (context) => {
 
     console.log(`[Sitemap Fetch] Fetching: ${targetUrl}`);
 
-    const response = await fetchWithTimeout(targetUrl, 55000);
+    const response = await fetchWithTimeout(targetUrl, 90000);
 
     if (!response.ok) {
       return new Response(
