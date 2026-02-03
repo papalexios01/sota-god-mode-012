@@ -394,6 +394,46 @@ export class NeuronWriterService {
   }
 
   /**
+   * Find an existing query by keyword (case-insensitive match)
+   * Returns the first matching ready query if found
+   */
+  async findQueryByKeyword(
+    projectId: string,
+    keyword: string
+  ): Promise<{ success: boolean; query?: NeuronWriterQuery; error?: string }> {
+    console.log(`[NeuronWriter] Searching for existing query: "${keyword}" in project ${projectId}`);
+    
+    const listResult = await this.listQueries(projectId, { status: 'ready' });
+    
+    if (!listResult.success) {
+      return { success: false, error: listResult.error };
+    }
+
+    const normalizedKeyword = keyword.toLowerCase().trim();
+    
+    // Try exact match first
+    let match = listResult.queries?.find(
+      q => (q.keyword || '').toLowerCase().trim() === normalizedKeyword
+    );
+
+    // If no exact match, try partial match (keyword contains or is contained in)
+    if (!match) {
+      match = listResult.queries?.find(q => {
+        const qKeyword = (q.keyword || '').toLowerCase().trim();
+        return qKeyword.includes(normalizedKeyword) || normalizedKeyword.includes(qKeyword);
+      });
+    }
+
+    if (match) {
+      console.log(`[NeuronWriter] ✅ Found existing query: "${match.keyword}" (ID: ${match.id})`);
+      return { success: true, query: match };
+    }
+
+    console.log(`[NeuronWriter] No existing query found for: "${keyword}"`);
+    return { success: true, query: undefined };
+  }
+
+  /**
    * Create a new query (keyword analysis)
    * API: /new-query (POST)
    */
