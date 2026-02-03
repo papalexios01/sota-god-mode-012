@@ -1,4 +1,4 @@
-import { Settings, BarChart3, FileText, Check, Zap } from "lucide-react";
+import { Settings, BarChart3, FileText, Check, Zap, Bot } from "lucide-react";
 import { useOptimizerStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -9,10 +9,12 @@ const steps = [
 ];
 
 export function OptimizerNav() {
-  const { currentStep, setCurrentStep, contentItems } = useOptimizerStore();
+  const { currentStep, setCurrentStep, contentItems, godModeState } = useOptimizerStore();
   
   const totalItems = contentItems.length;
   const completedItems = contentItems.filter((i) => i.status === "completed").length;
+  const isGodModeRunning = godModeState.status === 'running';
+  const isGodModePaused = godModeState.status === 'paused';
 
   return (
     <aside className="w-64 bg-card border-r border-border flex flex-col">
@@ -75,13 +77,40 @@ export function OptimizerNav() {
         })}
       </nav>
 
+      {/* God Mode Status */}
+      {(isGodModeRunning || isGodModePaused) && (
+        <div className="mx-4 mb-4 p-3 bg-gradient-to-r from-primary/20 to-primary/10 border border-primary/30 rounded-xl">
+          <div className="flex items-center gap-2 text-sm font-medium text-primary">
+            <Bot className="w-4 h-4" />
+            God Mode 2.0
+            <span className={cn(
+              "ml-auto px-1.5 py-0.5 text-xs rounded",
+              isGodModeRunning ? "bg-green-500/20 text-green-400" : "bg-yellow-500/20 text-yellow-400"
+            )}>
+              {isGodModeRunning ? 'ACTIVE' : 'PAUSED'}
+            </span>
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {godModeState.currentPhase ? (
+              <span className="capitalize">{godModeState.currentPhase}...</span>
+            ) : (
+              <span>Queue: {godModeState.queue.length} items</span>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="p-4 border-t border-border">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-          <span>System Ready</span>
+          <div className={cn(
+            "w-2 h-2 rounded-full animate-pulse",
+            isGodModeRunning ? "bg-green-500" : "bg-primary"
+          )} />
+          <span>{isGodModeRunning ? 'God Mode Active' : 'System Ready'}</span>
         </div>
         <div className="text-xs text-muted-foreground mt-1">
           {totalItems} items • {completedItems} done
+          {isGodModeRunning && ` • Cycle ${godModeState.stats.cycleCount}`}
         </div>
       </div>
     </aside>

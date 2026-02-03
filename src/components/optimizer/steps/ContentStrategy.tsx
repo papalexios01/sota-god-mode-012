@@ -3,7 +3,7 @@ import { useOptimizerStore } from "@/lib/store";
 import { 
   BookOpen, FileText, Target, RefreshCw, FolderOpen, Image,
   Zap, Plus, Upload, Link, Trash2, AlertCircle, ArrowRight,
-  BarChart3, Search, Sparkles, Loader2
+  BarChart3, Search, Sparkles, Loader2, Bot
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -11,10 +11,12 @@ import { getSupabaseAnonKey, getSupabaseUrl } from "@/integrations/supabase/clie
 import { crawlSitemapUrls, type SitemapCrawlProgress } from "@/lib/sitemap/crawlSitemap";
 import { fetchSitemapTextRaced } from "@/lib/sitemap/fetchSitemapText";
 import { discoverWordPressUrls } from "@/lib/sitemap/wordpressDiscovery";
+import { GodModeDashboard } from "../GodModeDashboard";
 
 const tabs = [
   { id: "bulk", label: "📚 Bulk Planner", icon: BookOpen },
   { id: "single", label: "📝 Single Article", icon: FileText },
+  { id: "godmode", label: "⚡ God Mode 2.0", icon: Bot },
   { id: "gap", label: "🎯 Gap Analysis", icon: Target },
   { id: "refresh", label: "🔄 Quick Refresh", icon: RefreshCw },
   { id: "hub", label: "🗂️ Content Hub", icon: FolderOpen },
@@ -522,27 +524,14 @@ export function ContentStrategy() {
           </div>
         )}
 
+        {activeTab === "godmode" && (
+          <GodModeDashboard />
+        )}
+
         {activeTab === "gap" && (
           <div className="space-y-6">
-            {/* God Mode Section */}
-            <div className="bg-gradient-to-r from-primary/10 to-primary/5 border border-primary/30 rounded-xl p-4">
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={godModeEnabled}
-                  onChange={(e) => setGodModeEnabled(e.target.checked)}
-                  className="mt-1 w-5 h-5 rounded border-border text-primary focus:ring-primary/50"
-                />
-                <div>
-                  <span className="font-semibold text-foreground">💤 God Mode (Autonomous Maintenance)</span>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Automatically scans your sitemap, prioritizes critical pages, and performs surgical SEO/Fact updates forever.
-                  </p>
-                </div>
-              </label>
-            </div>
-
-            <label className="flex items-center gap-3 cursor-pointer">
+            {/* Priority Only Mode Toggle */}
+            <label className="flex items-center gap-3 cursor-pointer p-4 bg-muted/30 rounded-xl border border-border">
               <input
                 type="checkbox"
                 checked={priorityOnlyMode}

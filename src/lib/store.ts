@@ -1,5 +1,16 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type {
+  GodModeState,
+  GodModeActivityItem,
+  GodModeHistoryItem,
+  GodModeConfig,
+} from './sota/GodModeTypes';
+import {
+  DEFAULT_GOD_MODE_STATE,
+  DEFAULT_GOD_MODE_CONFIG,
+  DEFAULT_GOD_MODE_STATS,
+} from './sota/GodModeTypes';
 
 export interface ContentItem {
   id: string;
@@ -105,11 +116,24 @@ interface OptimizerStore {
   sitemapUrls: string[];
   setSitemapUrls: (urls: string[]) => void;
   
-  // God Mode
+  // God Mode Legacy (simple toggle)
   godModeEnabled: boolean;
   priorityOnlyMode: boolean;
   setGodModeEnabled: (enabled: boolean) => void;
   setPriorityOnlyMode: (enabled: boolean) => void;
+  
+  // God Mode 2.0 State
+  godModeState: GodModeState;
+  setGodModeState: (updates: Partial<GodModeState>) => void;
+  addGodModeActivity: (item: Omit<GodModeActivityItem, 'id' | 'timestamp'>) => void;
+  addGodModeHistory: (item: GodModeHistoryItem) => void;
+  updateGodModeStats: (updates: { 
+    totalProcessed?: number; 
+    successCount?: number; 
+    errorCount?: number; 
+    qualityScore?: number; 
+    wordCount?: number;
+  }) => void;
 }
 
 export const useOptimizerStore = create<OptimizerStore>()(
@@ -208,6 +232,59 @@ export const useOptimizerStore = create<OptimizerStore>()(
       priorityOnlyMode: false,
       setGodModeEnabled: (enabled) => set({ godModeEnabled: enabled }),
       setPriorityOnlyMode: (enabled) => set({ priorityOnlyMode: enabled }),
+      
+      // God Mode 2.0 State
+      godModeState: DEFAULT_GOD_MODE_STATE,
+      setGodModeState: (updates) => set((state) => ({
+        godModeState: { ...state.godModeState, ...updates }
+      })),
+      addGodModeActivity: (item) => set((state) => ({
+        godModeState: {
+          ...state.godModeState,
+          activityLog: [
+            {
+              id: crypto.randomUUID(),
+              timestamp: new Date(),
+              ...item,
+            },
+            ...state.godModeState.activityLog.slice(0, 99), // Keep last 100
+          ],
+        }
+      })),
+      addGodModeHistory: (item) => set((state) => ({
+        godModeState: {
+          ...state.godModeState,
+          history: [item, ...state.godModeState.history.slice(0, 99)], // Keep last 100
+        }
+      })),
+      updateGodModeStats: (updates) => set((state) => {
+        const stats = state.godModeState.stats;
+        const newTotal = stats.totalProcessed + (updates.totalProcessed || 0);
+        const newSuccess = stats.successCount + (updates.successCount || 0);
+        const newError = stats.errorCount + (updates.errorCount || 0);
+        const newWords = stats.totalWordsGenerated + (updates.wordCount || 0);
+        
+        // Calculate new average quality score
+        let newAvgQuality = stats.avgQualityScore;
+        if (updates.qualityScore && updates.qualityScore > 0) {
+          const totalQuality = stats.avgQualityScore * stats.totalProcessed + updates.qualityScore;
+          newAvgQuality = newTotal > 0 ? totalQuality / newTotal : updates.qualityScore;
+        }
+        
+        return {
+          godModeState: {
+            ...state.godModeState,
+            stats: {
+              ...stats,
+              totalProcessed: newTotal,
+              successCount: newSuccess,
+              errorCount: newError,
+              avgQualityScore: newAvgQuality,
+              totalWordsGenerated: newWords,
+            }
+          }
+        };
+      }),
     }),
     {
       name: 'wp-optimizer-storage',
