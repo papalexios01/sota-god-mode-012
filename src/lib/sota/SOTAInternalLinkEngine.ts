@@ -21,12 +21,25 @@ interface AnchorCandidate {
   context: string;
 }
 
+interface PageTopic {
+  page: SitePage;
+  /** Normalized tokens describing this page (unordered). */
+  tokenSet: Set<string>;
+  /** Normalized, ordered tokens from the page title. */
+  titleTokens: string[];
+}
+
 export class SOTAInternalLinkEngine {
   private sitePages: SitePage[];
   private stopWords: Set<string>;
 
+  // Precomputed index for fast, high-quality matching
+  private pageTopics: PageTopic[] = [];
+  private tokenToPages: Map<string, number[]> = new Map();
+  private tokenDf: Map<string, number> = new Map();
+  private tokenIdf: Map<string, number> = new Map();
+
   constructor(sitePages: SitePage[] = []) {
-    this.sitePages = sitePages;
     this.stopWords = new Set([
       'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
       'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'been',
@@ -37,10 +50,14 @@ export class SOTAInternalLinkEngine {
       'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so',
       'than', 'too', 'very', 'just', 'also', 'now', 'here', 'there', 'then'
     ]);
+
+    this.sitePages = sitePages;
+    this.rebuildIndex();
   }
 
   updateSitePages(pages: SitePage[]): void {
     this.sitePages = pages;
+    this.rebuildIndex();
     console.log(`[InternalLinkEngine] Updated with ${pages.length} site pages`);
   }
 
@@ -59,46 +76,32 @@ export class SOTAInternalLinkEngine {
     // Strip existing links to avoid re-linking
     const contentWithoutLinks = content.replace(/<a[^>]*>.*?<\/a>/gi, '');
     const plainText = this.stripHtml(contentWithoutLinks);
-    
-    const candidates: AnchorCandidate[] = [];
+
+    const allCandidates = this.findBestAnchorsAcrossPages(plainText);
+
+    // Greedy select: highest score first, no overlaps, unique URLs
     const usedUrls = new Set<string>();
     const usedRanges: Array<[number, number]> = [];
+    const links: InternalLink[] = [];
 
-    // For each page, find the BEST contextual anchor in the content
-    for (const page of this.sitePages) {
-      const pageAnchors = this.findContextualAnchors(plainText, page);
-      
-      for (const anchor of pageAnchors) {
-        // Check if this range overlaps with existing anchors
-        const overlaps = usedRanges.some(([start, end]) => 
-          (anchor.startIndex >= start && anchor.startIndex < end) ||
-          (anchor.endIndex > start && anchor.endIndex <= end)
-        );
-        
-        if (!overlaps && !usedUrls.has(page.url)) {
-          candidates.push(anchor);
-        }
-      }
-    }
+    for (const c of allCandidates.sort((a, b) => b.score - a.score)) {
+      if (links.length >= maxLinks) break;
+      if (usedUrls.has(c.page.url)) continue;
+      const overlaps = usedRanges.some(([start, end]) =>
+        (c.startIndex < end && c.endIndex > start)
+      );
+      if (overlaps) continue;
 
-    // Sort by score (highest first) and take top N
-    const sortedCandidates = candidates
-      .sort((a, b) => b.score - a.score)
-      .slice(0, maxLinks);
-
-    // Convert to InternalLink format
-    const links: InternalLink[] = sortedCandidates.map(c => {
       usedUrls.add(c.page.url);
       usedRanges.push([c.startIndex, c.endIndex]);
-      
-      return {
+      links.push({
         anchor: c.anchor,
         targetUrl: c.page.url,
         context: c.context,
         priority: Math.min(100, c.score),
         relevanceScore: Math.min(100, c.score)
-      };
-    });
+      });
+    }
 
     console.log(`[InternalLinkEngine] Found ${links.length} high-quality link opportunities`);
     links.forEach(l => console.log(`  → "${l.anchor}" → ${l.targetUrl}`));
@@ -107,121 +110,76 @@ export class SOTAInternalLinkEngine {
   }
 
   /**
-   * Find contextual 3-7 word anchor phrases that match a page topic
+   * Find the best (topic-tight) anchors for ALL pages in one pass.
+   *
+   * Strategy:
+   * - Enumerate 3–7 word n-grams in each sentence
+   * - Score each n-gram against candidate pages using an IDF-weighted overlap + title-phrase match
+   * - Keep only the BEST candidate per page
    */
-  private findContextualAnchors(text: string, page: SitePage): AnchorCandidate[] {
-    const candidates: AnchorCandidate[] = [];
-    const textLower = text.toLowerCase();
-    
-    // Extract page topic keywords from title and URL
-    const titleWords = this.extractKeywordsFromTitle(page.title);
-    const slugWords = this.extractKeywordsFromSlug(page.url);
-    const pageKeywords = [...new Set([...titleWords, ...slugWords, ...(page.keywords || [])])];
-    
-    if (pageKeywords.length === 0) return [];
+  private findBestAnchorsAcrossPages(text: string): AnchorCandidate[] {
+    if (this.sitePages.length === 0 || this.pageTopics.length === 0) return [];
 
-    // Split text into sentences for context extraction
-    const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 20);
-    
-    for (const sentence of sentences) {
-      const sentenceLower = sentence.toLowerCase();
-      const sentenceStart = text.indexOf(sentence);
-      if (sentenceStart === -1) continue;
-      
-      // Find phrases containing page keywords
-      for (const keyword of pageKeywords) {
-        if (keyword.length < 4) continue;
-        
-        const keywordIndex = sentenceLower.indexOf(keyword.toLowerCase());
-        if (keywordIndex === -1) continue;
-        
-        // Extract 3-7 word phrase around the keyword
-        const phrase = this.extractPhraseAroundKeyword(sentence, keywordIndex, keyword.length);
-        
-        if (phrase && phrase.wordCount >= 3 && phrase.wordCount <= 7) {
-          const globalStart = sentenceStart + phrase.startOffset;
-          const globalEnd = globalStart + phrase.text.length;
-          
-          // Score based on relevance
-          const score = this.calculateAnchorScore(phrase.text, page, pageKeywords);
-          
-          if (score >= 40) {
-            candidates.push({
-              anchor: phrase.text,
-              page,
-              startIndex: globalStart,
-              endIndex: globalEnd,
+    type Best = { score: number; candidate: AnchorCandidate };
+    const bestByPage = new Map<number, Best>();
+
+    const sentences = this.splitSentencesWithOffsets(text)
+      .filter(s => s.text.trim().length >= 40);
+
+    for (const s of sentences) {
+      const tokenMatches = this.tokenizeWithPositions(s.text, s.startIndex);
+      if (tokenMatches.length < 3) continue;
+
+      for (let i = 0; i <= tokenMatches.length - 3; i++) {
+        for (let len = 3; len <= 7; len++) {
+          const j = i + len - 1;
+          if (j >= tokenMatches.length) break;
+
+          const span = tokenMatches.slice(i, j + 1);
+          const anchor = this.cleanAnchorText(span.map(t => t.raw).join(' '));
+          if (!anchor) continue;
+          if (!this.isValidAnchor(anchor)) continue;
+
+          // Only consider pages that share at least one non-generic token with the anchor
+          const anchorTokens = span.map(t => t.token);
+          const pageHitCounts = this.getCandidatePageHitCounts(anchorTokens);
+          if (pageHitCounts.size === 0) continue;
+
+          for (const [pageIdx, overlapCount] of pageHitCounts) {
+            const topic = this.pageTopics[pageIdx];
+            if (!topic) continue;
+
+            const titleRun = this.longestContiguousRun(anchorTokens, topic.titleTokens);
+            const hasSpecificToken = anchorTokens.some(t => (this.tokenIdf.get(t) ?? 0) >= 1.55);
+
+            // Quality gates: avoid "best" matching everything.
+            if (overlapCount < 2 && titleRun < 2 && !hasSpecificToken) continue;
+
+            const score = this.scoreAnchorForTopic(anchorTokens, topic, overlapCount, titleRun);
+            if (score < 70) continue;
+
+            const startIndex = span[0].startIndex;
+            const endIndex = span[span.length - 1].endIndex;
+
+            const candidate: AnchorCandidate = {
+              anchor,
+              page: topic.page,
+              startIndex,
+              endIndex,
               score,
-              context: sentence.trim().substring(0, 150)
-            });
+              context: s.text.trim().slice(0, 180)
+            };
+
+            const existing = bestByPage.get(pageIdx);
+            if (!existing || score > existing.score) {
+              bestByPage.set(pageIdx, { score, candidate });
+            }
           }
         }
       }
     }
-    
-    // Return best candidate for this page
-    return candidates.sort((a, b) => b.score - a.score).slice(0, 1);
-  }
 
-  /**
-   * Extract a natural 3-7 word phrase around a keyword
-   */
-  private extractPhraseAroundKeyword(
-    sentence: string, 
-    keywordIndex: number, 
-    keywordLength: number
-  ): { text: string; wordCount: number; startOffset: number } | null {
-    const words = sentence.split(/\s+/);
-    const positions: Array<{ word: string; start: number; end: number }> = [];
-    
-    let pos = 0;
-    for (const word of words) {
-      const start = sentence.indexOf(word, pos);
-      positions.push({ word, start, end: start + word.length });
-      pos = start + word.length;
-    }
-    
-    // Find which word contains the keyword
-    let keywordWordIndex = -1;
-    for (let i = 0; i < positions.length; i++) {
-      if (positions[i].start <= keywordIndex && positions[i].end >= keywordIndex) {
-        keywordWordIndex = i;
-        break;
-      }
-    }
-    
-    if (keywordWordIndex === -1) return null;
-    
-    // Try different phrase lengths (prefer 4-5 words)
-    const phraseLengths = [5, 4, 6, 3, 7];
-    
-    for (const len of phraseLengths) {
-      // Try centering the phrase around the keyword
-      const halfLen = Math.floor(len / 2);
-      let startIdx = Math.max(0, keywordWordIndex - halfLen);
-      let endIdx = Math.min(positions.length - 1, startIdx + len - 1);
-      
-      // Adjust if we hit the end
-      if (endIdx - startIdx + 1 < len) {
-        startIdx = Math.max(0, endIdx - len + 1);
-      }
-      
-      const phraseWords = positions.slice(startIdx, endIdx + 1);
-      if (phraseWords.length < 3) continue;
-      
-      const phraseText = phraseWords.map(p => p.word).join(' ');
-      const cleanPhrase = this.cleanAnchorText(phraseText);
-      
-      if (cleanPhrase && this.isValidAnchor(cleanPhrase)) {
-        return {
-          text: cleanPhrase,
-          wordCount: cleanPhrase.split(/\s+/).length,
-          startOffset: phraseWords[0].start
-        };
-      }
-    }
-    
-    return null;
+    return Array.from(bestByPage.values()).map(v => v.candidate);
   }
 
   /**
@@ -244,11 +202,23 @@ export class SOTAInternalLinkEngine {
     // Must be 3-7 words
     if (words.length < 3 || words.length > 7) return false;
     
-    // At least 2 meaningful words (not stop words)
-    const meaningfulWords = words.filter(w => 
-      w.length > 2 && !this.stopWords.has(w.toLowerCase())
-    );
-    if (meaningfulWords.length < 2) return false;
+    // Must not start/end with a stop word (anchors should be self-contained concepts)
+    const first = words[0]?.toLowerCase();
+    const last = words[words.length - 1]?.toLowerCase();
+    if (!first || !last) return false;
+    if (this.stopWords.has(first) || this.stopWords.has(last)) return false;
+
+    // At least 3 meaningful words (not stop words)
+    const meaningfulWords = words.filter(w => w.length > 2 && !this.stopWords.has(w.toLowerCase()));
+    if (meaningfulWords.length < 3) return false;
+
+    // Ban obvious junk anchors
+    const lower = text.toLowerCase();
+    const banned = [
+      'click here', 'learn more', 'read more', 'this article', 'this guide',
+      'in this post', 'in this guide', 'in this article'
+    ];
+    if (banned.some(b => lower.includes(b))) return false;
     
     // No weird characters
     if (/[<>{}[\]|\\^]/.test(text)) return false;
@@ -259,43 +229,44 @@ export class SOTAInternalLinkEngine {
     return true;
   }
 
-  /**
-   * Calculate relevance score for anchor-page match
-   */
-  private calculateAnchorScore(anchor: string, page: SitePage, pageKeywords: string[]): number {
-    let score = 50; // Base score
-    const anchorLower = anchor.toLowerCase();
-    const titleLower = page.title.toLowerCase();
-    
-    // Title word match bonus
-    const titleWords = titleLower.split(/\s+/).filter(w => w.length > 3);
-    const anchorWords = anchorLower.split(/\s+/);
-    
-    for (const titleWord of titleWords) {
-      if (anchorWords.some(aw => aw.includes(titleWord) || titleWord.includes(aw))) {
-        score += 15;
-      }
-    }
-    
-    // Keyword match bonus
-    for (const keyword of pageKeywords) {
-      if (anchorLower.includes(keyword.toLowerCase())) {
-        score += 20;
-      }
-    }
-    
-    // Phrase naturalness bonus (4-5 words is ideal)
-    const wordCount = anchor.split(/\s+/).length;
-    if (wordCount === 4 || wordCount === 5) {
-      score += 10;
-    }
-    
-    // Penalize very short anchors
-    if (anchor.length < 20) {
-      score -= 15;
-    }
-    
-    return Math.min(100, score);
+  private scoreAnchorForTopic(
+    anchorTokens: string[],
+    topic: PageTopic,
+    overlapCount: number,
+    titleRun: number
+  ): number {
+    let score = 0;
+
+    // Token overlap (IDF-weighted) = relevance
+    const overlap = anchorTokens.filter(t => topic.tokenSet.has(t));
+    const overlapScore = overlap.reduce((sum, t) => sum + ((this.tokenIdf.get(t) ?? 0) * 22), 0);
+    score += overlapScore;
+
+    // Title phrase match = strong intent alignment
+    score += Math.min(60, titleRun * 18 + Math.max(0, titleRun - 1) * 10);
+
+    // Multi-token overlap bonus
+    if (overlapCount >= 3) score += 18;
+    if (overlapCount >= 4) score += 10;
+
+    // 4–5 words tends to read like a natural anchor
+    const wc = anchorTokens.length;
+    if (wc === 4 || wc === 5) score += 8;
+
+    // Penalize anchors full of generic filler/pronouns
+    const badTokens = new Set(['this', 'that', 'these', 'those', 'your', 'you', 'we', 'they', 'it', 'our', 'my']);
+    const badCount = anchorTokens.filter(t => badTokens.has(t)).length;
+    score -= badCount * 14;
+
+    // Penalize if anchor begins/ends with generic words (even if valid)
+    const generic = new Set(['best', 'top', 'guide', 'tips', 'review', 'reviews', 'comparison', 'comparisons', 'ultimate', 'complete']);
+    const first = anchorTokens[0];
+    const last = anchorTokens[anchorTokens.length - 1];
+    if (generic.has(first) || generic.has(last)) score -= 12;
+
+    // Normalize to 0..100
+    score = Math.max(0, Math.min(100, score));
+    return score;
   }
 
   /**
@@ -306,7 +277,7 @@ export class SOTAInternalLinkEngine {
       .toLowerCase()
       .split(/[\s\-_:,|]+/)
       .filter(w => w.length > 3 && !this.stopWords.has(w))
-      .slice(0, 5);
+      .slice(0, 12);
   }
 
   /**
@@ -315,10 +286,11 @@ export class SOTAInternalLinkEngine {
   private extractKeywordsFromSlug(url: string): string[] {
     try {
       const pathname = new URL(url).pathname;
-      const slug = pathname.split('/').filter(Boolean).pop() || '';
-      return slug
-        .split(/[\-_]+/)
-        .filter(w => w.length > 3 && !this.stopWords.has(w.toLowerCase()));
+      const segments = pathname.split('/').filter(Boolean);
+      const words = segments.flatMap(seg => seg.split(/[\-_]+/));
+      return words
+        .map(w => w.toLowerCase())
+        .filter(w => w.length > 3 && !this.stopWords.has(w));
     } catch {
       return [];
     }
@@ -346,59 +318,205 @@ export class SOTAInternalLinkEngine {
   injectContextualLinks(content: string, links: InternalLink[]): string {
     if (links.length === 0) return content;
     
-    let modifiedContent = content;
     const injectedAnchors = new Set<string>();
     let injectedCount = 0;
 
-    // Sort by anchor length (longer first) to avoid partial replacements
-    const sortedLinks = [...links].sort((a, b) => 
-      (b.anchor?.length || 0) - (a.anchor?.length || 0)
-    );
+    // Split around existing links so we NEVER inject inside them (avoids fragile lookbehind regex)
+    const parts = content.split(/(<a\b[^>]*>[\s\S]*?<\/a>)/gi);
+
+    // Sort by anchor length (longer first) to avoid partial matches
+    const sortedLinks = [...links].sort((a, b) => (b.anchor?.length || 0) - (a.anchor?.length || 0));
 
     for (const link of sortedLinks) {
-      const anchor = link.anchor || '';
+      const anchor = (link.anchor || '').trim();
       if (!anchor || !link.targetUrl) continue;
       if (injectedAnchors.has(anchor.toLowerCase())) continue;
-      
-      try {
-        // Create regex that matches the anchor but NOT inside existing links
-        const escapedAnchor = this.escapeRegex(anchor);
-        
-        // Match anchor text that is NOT inside an <a> tag
-        // Use negative lookbehind for <a...> and negative lookahead for </a>
-        const regex = new RegExp(
-          `(?<!<a[^>]*>)(?<![">])\\b(${escapedAnchor})\\b(?![^<]*<\\/a>)`,
-          'i'
-        );
-        
-        const match = modifiedContent.match(regex);
-        if (match && match.index !== undefined) {
-          const actualText = modifiedContent.substring(match.index, match.index + match[0].length);
-          
-          // Create the link with helpful title attribute
-          const linkHtml = `<a href="${link.targetUrl}" title="Learn more about ${anchor}">${actualText}</a>`;
-          
-          modifiedContent = 
-            modifiedContent.slice(0, match.index) + 
-            linkHtml + 
-            modifiedContent.slice(match.index + match[0].length);
-          
-          injectedAnchors.add(anchor.toLowerCase());
-          injectedCount++;
-          
-          console.log(`[InternalLinkEngine] ✅ Linked: "${anchor}" → ${link.targetUrl}`);
-        }
-      } catch (e) {
-        console.warn(`[InternalLinkEngine] Regex error for "${anchor}":`, e);
+
+      const regex = this.buildFlexibleAnchorRegex(anchor);
+      let didInject = false;
+
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        if (!part) continue;
+        // Keep existing <a>...</a> segments untouched
+        if (/^<a\b/i.test(part)) continue;
+
+        const match = part.match(regex);
+        if (!match) continue;
+
+        const actualText = match[0];
+        const linkHtml = `<a href="${link.targetUrl}" title="Learn more about ${anchor}">${actualText}</a>`;
+        parts[i] = part.replace(regex, linkHtml);
+        didInject = true;
+        break;
+      }
+
+      if (didInject) {
+        injectedAnchors.add(anchor.toLowerCase());
+        injectedCount++;
+        console.log(`[InternalLinkEngine] ✅ Linked: "${anchor}" → ${link.targetUrl}`);
       }
     }
 
     console.log(`[InternalLinkEngine] Successfully injected ${injectedCount}/${links.length} links`);
-    return modifiedContent;
+    return parts.join('');
+  }
+
+  private buildFlexibleAnchorRegex(anchor: string): RegExp {
+    const words = anchor
+      .split(/\s+/)
+      .map(w => w.trim())
+      .filter(Boolean)
+      .map(w => this.escapeRegex(w));
+
+    // Match the same words even if the HTML contains newlines/non-breaking spaces
+    const pattern = words.map(w => `\\b${w}\\b`).join('(?:\\s|&nbsp;|\\u00A0)+');
+    return new RegExp(pattern, 'i');
   }
 
   private escapeRegex(str: string): string {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  private rebuildIndex(): void {
+    this.pageTopics = [];
+    this.tokenToPages = new Map();
+    this.tokenDf = new Map();
+    this.tokenIdf = new Map();
+
+    const total = this.sitePages.length;
+    if (total === 0) return;
+
+    // Build per-page topics and document frequency
+    const pageTokens: Array<{ titleTokens: string[]; tokens: string[] }> = this.sitePages.map(p => {
+      const titleTokens = this.tokenizeSimple(p.title)
+        .map(t => t.toLowerCase())
+        .filter(t => t.length > 2 && !this.stopWords.has(t));
+
+      const tokens = this.extractTopicTokens(p);
+      return { titleTokens, tokens };
+    });
+
+    for (const pt of pageTokens) {
+      const unique = new Set(pt.tokens);
+      for (const t of unique) {
+        this.tokenDf.set(t, (this.tokenDf.get(t) ?? 0) + 1);
+      }
+    }
+
+    // Compute IDF (higher = more specific)
+    for (const [t, df] of this.tokenDf) {
+      const idf = Math.log((total + 1) / (df + 1)) + 1;
+      this.tokenIdf.set(t, idf);
+    }
+
+    // Build token -> pages inverted index
+    for (let idx = 0; idx < this.sitePages.length; idx++) {
+      const { tokens, titleTokens } = pageTokens[idx];
+      const tokenSet = new Set(tokens);
+      this.pageTopics[idx] = { page: this.sitePages[idx], tokenSet, titleTokens };
+
+      for (const t of tokenSet) {
+        const arr = this.tokenToPages.get(t);
+        if (arr) arr.push(idx);
+        else this.tokenToPages.set(t, [idx]);
+      }
+    }
+  }
+
+  private extractTopicTokens(page: SitePage): string[] {
+    // Build a robust topic token set from title + URL path + provided keywords
+    const fromTitle = this.tokenizeSimple(page.title);
+    const fromSlug = this.extractKeywordsFromSlug(page.url);
+    const fromKeywords = (page.keywords || []).flatMap(k => this.tokenizeSimple(k));
+
+    const combined = [...fromTitle, ...fromSlug, ...fromKeywords]
+      .map(t => t.toLowerCase())
+      .map(t => t.replace(/[^a-z0-9']+/gi, ''))
+      .filter(Boolean)
+      .filter(t => t.length > 2)
+      .filter(t => !this.stopWords.has(t));
+
+    return Array.from(new Set(combined));
+  }
+
+  private tokenizeSimple(text: string): string[] {
+    return (text.match(/[A-Za-z0-9]+(?:'[A-Za-z0-9]+)*/g) || []);
+  }
+
+  private splitSentencesWithOffsets(text: string): Array<{ text: string; startIndex: number }> {
+    const out: Array<{ text: string; startIndex: number }> = [];
+
+    // Sentence-ish chunks: split on . ! ? or newlines, while preserving offsets
+    const regex = /[^.!?\n]+[.!?]?/g;
+    for (const match of text.matchAll(regex)) {
+      const raw = match[0] ?? '';
+      const startIndex = match.index ?? -1;
+      const trimmed = raw.trim();
+      if (startIndex >= 0 && trimmed.length) {
+        out.push({ text: trimmed, startIndex: startIndex + (raw.indexOf(trimmed) >= 0 ? raw.indexOf(trimmed) : 0) });
+      }
+    }
+    return out;
+  }
+
+  private tokenizeWithPositions(sentence: string, globalOffset: number): Array<{ raw: string; token: string; startIndex: number; endIndex: number }> {
+    const out: Array<{ raw: string; token: string; startIndex: number; endIndex: number }> = [];
+    const regex = /[A-Za-z0-9]+(?:'[A-Za-z0-9]+)*/g;
+    for (const m of sentence.matchAll(regex)) {
+      const raw = m[0];
+      const localStart = m.index ?? -1;
+      if (localStart < 0) continue;
+      const startIndex = globalOffset + localStart;
+      const endIndex = startIndex + raw.length;
+      out.push({ raw, token: raw.toLowerCase(), startIndex, endIndex });
+    }
+    return out;
+  }
+
+  private getCandidatePageHitCounts(anchorTokens: string[]): Map<number, number> {
+    const hitCounts = new Map<number, number>();
+    const totalPages = this.sitePages.length || 1;
+
+    // Only use reasonably-specific tokens to seed candidates (prevents "best" from matching everything)
+    const seedTokens = anchorTokens.filter(t => {
+      if (this.stopWords.has(t)) return false;
+      const df = this.tokenDf.get(t) ?? 0;
+      const ratio = df / totalPages;
+      return (this.tokenIdf.get(t) ?? 0) >= 1.25 && ratio <= 0.22;
+    });
+
+    const tokensToUse = seedTokens.length > 0 ? seedTokens : anchorTokens.filter(t => !this.stopWords.has(t));
+    if (tokensToUse.length === 0) return hitCounts;
+
+    for (const t of tokensToUse) {
+      const pages = this.tokenToPages.get(t);
+      if (!pages) continue;
+      for (const idx of pages) {
+        hitCounts.set(idx, (hitCounts.get(idx) ?? 0) + 1);
+      }
+    }
+
+    return hitCounts;
+  }
+
+  private longestContiguousRun(anchorTokens: string[], titleTokens: string[]): number {
+    if (anchorTokens.length === 0 || titleTokens.length === 0) return 0;
+    let best = 0;
+    for (let i = 0; i < anchorTokens.length; i++) {
+      for (let j = 0; j < titleTokens.length; j++) {
+        let k = 0;
+        while (
+          i + k < anchorTokens.length &&
+          j + k < titleTokens.length &&
+          anchorTokens[i + k] === titleTokens[j + k]
+        ) {
+          k++;
+        }
+        if (k > best) best = k;
+      }
+    }
+    return best;
   }
 
   /**
