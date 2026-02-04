@@ -507,7 +507,7 @@ export function SetupConfig() {
             <div className="p-4 bg-background/50 border border-border rounded-xl space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <label className="text-sm font-medium text-foreground">
-                  Supabase Edge Function (hyper-worker)
+                  Supabase Edge Function (neuronwriter-proxy)
                 </label>
                 <span className="text-xs text-muted-foreground">
                   Source:{" "}
@@ -547,7 +547,7 @@ export function SetupConfig() {
 
               <p className="text-xs text-muted-foreground">
                 Lovable preview hosts don’t have Cloudflare Pages Functions (so <code>/api/neuronwriter</code> 404s). Pasting your Supabase URL + anon
-                key here lets the app call your Supabase Edge Function <code>hyper-worker</code>. (Anon key is public.)
+                key here lets the app call your Supabase Edge Function <code>neuronwriter-proxy</code>. (Anon key is public.)
               </p>
             </div>
             
@@ -588,7 +588,7 @@ export function SetupConfig() {
                             lower.includes("proxy") ||
                             lower.includes("supabase") ||
                             lower.includes("vite_supabase") ||
-                            lower.includes("hyper-worker")
+                            lower.includes("neuronwriter-proxy")
                           );
                         })() && (
                           <p className="text-xs mt-1 text-red-300/80">
@@ -619,8 +619,8 @@ export function SetupConfig() {
                               // Supabase is present but the proxy is still failing.
                               return (
                                 <>
-                                  Supabase looks configured, but the proxy call is failing. Double-check the edge function name is
-                                  <code>hyper-worker</code> and it’s deployed in your Supabase project.
+                                  Supabase looks configured, but the proxy call is failing. Double-check the edge function name is{" "}
+                                  <code>neuronwriter-proxy</code> and it's deployed in your Supabase project.
                                 </>
                               );
                             })()}

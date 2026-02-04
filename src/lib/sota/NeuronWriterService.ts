@@ -161,7 +161,7 @@ export class NeuronWriterService {
         return {
           success: false,
           error:
-            'VITE_SUPABASE_URL is set but VITE_SUPABASE_ANON_KEY is missing. Add the anon key so the app can call your Supabase Edge Function (hyper-worker).',
+            'VITE_SUPABASE_URL is set but VITE_SUPABASE_ANON_KEY is missing. Add the anon key so the app can call your Supabase Edge Function (neuronwriter-proxy).',
         };
       }
 
@@ -177,7 +177,7 @@ export class NeuronWriterService {
     return { 
       success: false, 
       error:
-        'NeuronWriter proxy not available on this host. Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY so the app can call your Supabase Edge Function (hyper-worker).'
+        'NeuronWriter proxy not available on this host. Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY so the app can call your Supabase Edge Function (neuronwriter-proxy).'
     };
   }
 
@@ -192,7 +192,7 @@ export class NeuronWriterService {
     try {
       console.log(`[NeuronWriter] Invoking Supabase function: ${endpoint}`);
       
-      const { data, error } = await supabase!.functions.invoke('hyper-worker', {
+      const { data, error } = await supabase!.functions.invoke('neuronwriter-proxy', {
         body: {
           endpoint,
           method,
@@ -230,7 +230,7 @@ export class NeuronWriterService {
     method: string,
     body?: Record<string, unknown>
   ): Promise<{ success: boolean; data?: T; error?: string }> {
-    const proxyUrl = `${supabaseUrl}/functions/v1/hyper-worker`;
+    const proxyUrl = `${supabaseUrl}/functions/v1/neuronwriter-proxy`;
     
     try {
       console.log(`[NeuronWriter] Direct proxy call: ${endpoint}`);
@@ -310,7 +310,7 @@ export class NeuronWriterService {
         return {
           success: false,
           error:
-            'Cloudflare proxy not available (404). Either deploy the Cloudflare Pages Function at /api/neuronwriter, or configure VITE_SUPABASE_URL so the app can use your Supabase Edge Function (hyper-worker).',
+            'Cloudflare proxy not available (404). Either deploy the Cloudflare Pages Function at /api/neuronwriter, or configure VITE_SUPABASE_URL so the app can use your Supabase Edge Function (neuronwriter-proxy).',
         };
       }
 
