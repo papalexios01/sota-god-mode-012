@@ -11,9 +11,21 @@ import type { GeneratedContentStore } from '../store';
 
 const TABLE = 'generated_blog_posts';
 
+// Last DB connectivity error (for UI diagnostics)
+let lastDbCheckError: { kind: 'missing_table' | 'rls' | 'permission' | 'network' | 'unknown'; code?: string; message: string } | null = null;
+
+export function getLastDbCheckError() {
+  return lastDbCheckError;
+}
+
+
 export async function ensureTableExists(): Promise<boolean> {
   // If Supabase is not configured, return false (not an error state)
   if (!getSupabaseConfig().configured || !getSupabaseClient()) {
+<<<<<<< HEAD
+=======
+    lastDbCheckError = null;
+>>>>>>> a03bf59 (SOTA: Supabase diagnostics + test connection + correct RLS guidance)
     console.info('[ContentPersistence] Supabase not configured, using local storage only');
     return false;
   }
@@ -25,17 +37,38 @@ export async function ensureTableExists(): Promise<boolean> {
       .limit(1);
 
     if (error) {
-      // Table doesn't exist or permission issue
-      if (error.code === '42P01' || error.message?.includes('does not exist')) {
+      const msg = error.message || 'Unknown error';
+      const code = (error as any).code as string | undefined;
+
+      // Table missing
+      if (code === '42P01' || msg.includes('does not exist')) {
+        lastDbCheckError = { kind: 'missing_table', code, message: msg };
         console.warn('[ContentPersistence] Table does not exist:', TABLE);
         return false;
       }
-      console.error('[ContentPersistence] Table check failed:', error.message);
+
+      // Common RLS/permission failures
+      if (msg.toLowerCase().includes('row level security') || msg.toLowerCase().includes('rls')) {
+        lastDbCheckError = { kind: 'rls', code, message: msg };
+        console.error('[ContentPersistence] RLS blocked access:', msg);
+        return false;
+      }
+
+      if (msg.toLowerCase().includes('permission') || code in ('42501')) {
+        lastDbCheckError = { kind: 'permission', code, message: msg };
+        console.error('[ContentPersistence] Permission blocked access:', msg);
+        return false;
+      }
+
+      lastDbCheckError = { kind: 'unknown', code, message: msg };
+      console.error('[ContentPersistence] Table check failed:', msg);
       return false;
     }
 
+    lastDbCheckError = null;
     return true;
-  } catch (err) {
+  } catch (err: any) {
+    lastDbCheckError = { kind: 'network', message: err?.message || String(err) };
     console.error('[ContentPersistence] Connection error:', err);
     return false;
   }

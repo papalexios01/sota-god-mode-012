@@ -7,7 +7,13 @@ import {
   Settings, Loader2, FolderOpen, RefreshCw, XCircle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+<<<<<<< HEAD
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseConfig, validateSupabaseConfig } from "@/lib/supabaseClient";
+=======
+import { toast } from "sonner";
+import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseConfig, validateSupabaseConfig } from "@/lib/supabaseClient";
+import { ensureTableExists, getLastDbCheckError } from "@/lib/api/contentPersistence";
+>>>>>>> a03bf59 (SOTA: Supabase diagnostics + test connection + correct RLS guidance)
 
 const OPENROUTER_MODELS = [
   { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet' },
@@ -119,6 +125,33 @@ export function SetupConfig() {
     saveSupabaseConfig(url, key);
   };
 
+<<<<<<< HEAD
+=======
+  const handleTestSupabase = async () => {
+    try {
+      const ok = await ensureTableExists();
+      if (ok) {
+        toast.success('Supabase connected ✓ History sync is online.');
+        return;
+      }
+      const detail = getLastDbCheckError();
+      if (!detail) {
+        toast.error('Supabase not configured (missing URL or anon key).');
+        return;
+      }
+      if (detail.kind === 'missing_table') {
+        toast.error('Connected, but table generated_blog_posts is missing. Create it in Supabase SQL Editor.');
+      } else if (detail.kind === 'rls') {
+        toast.error('Connected, but RLS is blocking access. Update your RLS policy.');
+      } else {
+        toast.error(detail.message);
+      }
+    } catch (e: any) {
+      toast.error(e?.message || 'Supabase connection test failed');
+    }
+  };
+
+>>>>>>> a03bf59 (SOTA: Supabase diagnostics + test connection + correct RLS guidance)
   const handleClearSupabase = () => {
     setSbUrl('');
     setSbAnonKey('');
@@ -423,6 +456,16 @@ export function SetupConfig() {
           </button>
 
           <button
+<<<<<<< HEAD
+=======
+            onClick={handleTestSupabase}
+            className="px-4 py-2 rounded-xl font-semibold transition-all premium-ring border border-border/60 bg-background/10 hover:bg-background/25"
+          >
+            Test Connection
+          </button>
+
+          <button
+>>>>>>> a03bf59 (SOTA: Supabase diagnostics + test connection + correct RLS guidance)
             onClick={handleClearSupabase}
             className="px-4 py-2 rounded-xl font-semibold transition-all premium-ring border border-border/60 bg-background/10 hover:bg-background/25"
           >

@@ -1,7 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useOptimizerStore, type GeneratedContentStore } from '@/lib/store';
 import { getSupabaseConfig } from '@/lib/supabaseClient';
+<<<<<<< HEAD
 import { loadAllBlogPosts, saveBlogPost, deleteBlogPost, ensureTableExists } from '@/lib/api/contentPersistence';
+=======
+import { loadAllBlogPosts, saveBlogPost, deleteBlogPost, ensureTableExists, getLastDbCheckError } from '@/lib/api/contentPersistence';
+>>>>>>> a03bf59 (SOTA: Supabase diagnostics + test connection + correct RLS guidance)
 import { toast } from 'sonner';
 
 // =============================================================================
@@ -43,7 +47,18 @@ export function useDataSync() {
     try {
       const tableExists = await ensureTableExists();
       if (!tableExists) {
-        setError('Database connection failed. The server may not be running.');
+        const detail = getLastDbCheckError();
+        if (detail?.kind === 'missing_table') {
+          setError('Supabase is reachable but the table generated_blog_posts is missing. Create it in Supabase SQL Editor.');
+        } else if (detail?.kind === 'rls') {
+          setError('Supabase is reachable but RLS is blocking access. Fix RLS policy for anon/authenticated.');
+        } else if (detail?.kind === 'permission') {
+          setError('Supabase is reachable but permissions are blocking access. Check API settings and table grants.');
+        } else if (detail?.kind === 'network') {
+          setError(`Network / CORS issue connecting to Supabase: ${detail.message}`);
+        } else {
+          setError(detail?.message || 'Database connection failed.');
+        }
         setTableMissing(true);
         setIsConnected(false);
         setIsLoading(false);
