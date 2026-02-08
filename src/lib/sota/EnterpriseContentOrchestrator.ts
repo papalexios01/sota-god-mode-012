@@ -310,7 +310,7 @@ export class EnterpriseContentOrchestrator {
       /content continues|continue\?|would you like me to continue/i.test(s);
 
     // CRITICAL FIX: More aggressive continuation - up to 8 attempts, stricter word count check
-    const maxContinuations = targetWordCount >= 3200 ? 6 : 2; // avoid cutoff for long posts, still bounded
+    const maxContinuations = targetWordCount >= 5000 ? 10 : targetWordCount >= 3000 ? 8 : 3;
     for (let i = 1; i <= maxContinuations; i++) {
       // STRICT CHECK: Must reach minimum target OR look complete
       const tooShort = words < minTargetWords;
@@ -325,7 +325,7 @@ export class EnterpriseContentOrchestrator {
       const remainingWords = minAbsoluteWords - words;
       this.log(`⚠️ Content too short: ${words}/${minTargetWords} words (${percentComplete}%). Need ${remainingWords} more. Continuing... (${i}/${maxContinuations})`);
 
-      const tail = html.slice(-2000);
+      const tail = html.slice(-3000);
       const remainingNeeded = minAbsoluteWords - words;
       const continuationPrompt = `Continue the SAME HTML article titled "${title}" about "${keyword}" EXACTLY where it left off. You still need approximately ${remainingNeeded} more words.
 
@@ -349,6 +349,7 @@ Now continue:`;
         apiKeys: this.config.apiKeys,
         systemPrompt,
         temperature: 0.72,
+        maxTokens: 16384,
       });
 
       const nextChunk = this.stripModelContinuationArtifacts(next.content);
@@ -576,7 +577,7 @@ Now continue:`;
       let currentContent = enhancedContent;
       let currentScore = 0;
       const targetScore = 90;
-      const maxImprovementAttempts = 3; // quality: more attempts to hit 90+ NW score while still bounded
+      const maxImprovementAttempts = 5;
 
       const allTermsForSuggestions = [
         ...neuron.analysis.terms,
@@ -642,7 +643,7 @@ Now continue:`;
           if (allSuggestions.length > 0 || missingHeadings.length > 0) {
             this.log(`Missing: ${allSuggestions.length} terms, ${missingHeadings.length} headings`);
 
-            const termsPerAttempt = Math.min(25, allSuggestions.length);
+            const termsPerAttempt = Math.min(40, allSuggestions.length);
             const termsList = allSuggestions.slice(0, termsPerAttempt);
 
             const headingsInstruction = missingHeadings.length > 0
@@ -740,6 +741,8 @@ if (neuron) {
     requiredEntities: req.entities,
     requiredHeadings: req.h2
   });
+  // Final safety net: force any still-missing NeuronWriter terms/entities into the content
+  enhancedContent = this.enforceNeuronwriterCoverage(enhancedContent, req);
 } else {
   // Even without NeuronWriter, run a quick clarity polish
   enhancedContent = await this.selfCritiqueAndPatch({
@@ -791,6 +794,10 @@ if (neuron) {
     
     const slug = this.generateSlug(title);
     this.log(`SEO Title: "${seoTitle}" | Meta: ${metaDescription.length} chars`);
+
+    // CRITICAL: Ensure references section is always present AFTER all content transformations
+    enhancedContent = this.ensureReferencesSection(enhancedContent, references, serpAnalysis);
+    this.log(`References: ${references.length} sources appended to content`);
 
     const generatedContent: GeneratedContent = {
       id: crypto.randomUUID(),
@@ -1178,12 +1185,14 @@ Write the complete article now. Make it so valuable that readers bookmark it and
       const consensusResult = await this.engine.generateWithConsensus(prompt, systemPrompt);
       result = { content: consensusResult.finalContent };
     } else {
+      const initialMaxTokens = targetWordCount >= 3000 ? 16384 : 8192;
       result = await this.engine.generateWithModel({
         prompt,
         model: this.config.primaryModel || 'gemini',
         apiKeys: this.config.apiKeys,
         systemPrompt,
-        temperature: 0.78
+        temperature: 0.78,
+        maxTokens: initialMaxTokens
       });
     }
 
@@ -1462,20 +1471,22 @@ private async selfCritiqueAndPatch(params: {
   ].filter(Boolean).join("\n");
 
   // Keep it fast: single model call, moderate maxTokens
+  const contentLength = params.html.length;
+  const neededTokens = contentLength > 20000 ? 16384 : 8192;
   const res = await this.engine.generateWithModel({
     prompt: `ARTICLE TITLE: ${params.title}\nPRIMARY KEYWORD: ${params.keyword}\n\nCURRENT HTML (EDIT THIS):\n${params.html}\n\nINSTRUCTIONS:\n${instruction}`,
     model: this.config.primaryModel || 'gemini',
     apiKeys: this.config.apiKeys,
     systemPrompt: "Elite editor. Output PURE HTML ONLY. Do not add markdown.",
     temperature: 0.55,
-    maxTokens: 8192
+    maxTokens: neededTokens
   });
 
   return res.content || params.html;
 }
 
 
-private enforceNeuronwriterCoverage(html: string, req: NeuronRequirements): string {
+private enforceNeuronwriterCoverage(html: string, req: { requiredTerms: string[]; entities: string[]; h2: string[] }): string {
   const required = (req?.requiredTerms || []).map(t => String(t || "").trim()).filter(Boolean);
   const entities = (req?.entities || []).map(t => String(t || "").trim()).filter(Boolean);
 

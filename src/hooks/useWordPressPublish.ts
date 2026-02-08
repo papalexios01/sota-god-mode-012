@@ -62,91 +62,105 @@ export function useWordPressPublish() {
         existingPostId: options?.existingPostId,
       };
 
-// Primary: publish via Cloudflare Pages Function proxy (server-side) to avoid browser CORS/network "Failed to fetch"
-try {
-  const res = await fetch('/api/wordpress-publish', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      wordpressUrl,
-      username,
-      appPassword,
-      title: post.title,
-      content: appendReferencesIfMissing(post.content, (post as any).references, (post as any).serpAnalysis),
-      excerpt: post.excerpt || post.metaDescription || '',
-      slug: post.slug,
-      status: publishStatus,
-    }),
-  });
+      // ===== Strategy 1: Express server proxy (handles CORS, works in dev + production) =====
+      try {
+        const res = await fetch('/api/wordpress-publish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
 
-  const json = await res.json().catch(() => null);
-  if (res.ok && json?.success) {
-    return { success: true, data: json };
-  }
-  if (json?.error) throw new Error(String(json.error));
-} catch (e) {
-  console.warn('[WordPressPublish] Pages Function publish failed, falling back to Supabase function:', e);
-}
+        const json = await res.json().catch(() => null);
 
+        if (res.ok && json?.success) {
+          const post = json.post as Record<string, unknown> | undefined;
+          const result: PublishResult = {
+            success: true,
+            postId: post?.id as number | undefined,
+            postUrl: (post?.url || post?.link) as string | undefined,
+          };
+          setPublishResult(result);
+          return result;
+        }
 
-      const { url: supabaseUrl, anonKey: supabaseKey, configured, issues } = getSupabaseConfig();
+        if (json?.error) {
+          const errorMsg = String(json.error);
+          if (res.status === 401 || errorMsg.includes('Authentication') || errorMsg.includes('authentication')) {
+            throw new Error('WordPress authentication failed. Check your username and application password in Setup.');
+          }
+          if (res.status === 403) {
+            throw new Error('Permission denied. Ensure the WordPress user has publishing capabilities.');
+          }
+          if (res.status === 404 && errorMsg.includes('REST API')) {
+            throw new Error('WordPress REST API not found. Ensure permalinks are enabled.');
+          }
+          throw new Error(errorMsg);
+        }
+
+        console.warn('[WordPressPublish] Server proxy returned non-OK without error, trying Supabase fallback');
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes('authentication') || msg.includes('Permission') || msg.includes('REST API') || msg.includes('not configured')) {
+          throw e;
+        }
+        console.warn('[WordPressPublish] Server proxy failed, falling back to Supabase:', msg);
+      }
+
+      // ===== Strategy 2: Supabase Edge Function fallback =====
+      const { configured } = getSupabaseConfig();
 
       if (!configured) {
-        const detail = issues.length ? ` (${issues.join('; ')})` : '';
         throw new Error(
-          `Supabase not configured. Open Setup → Supabase and add your project URL + anon key, then reload.${detail}`
+          'Publishing failed. The server proxy is not available and Supabase is not configured. ' +
+          'Ensure the Express dev server is running (npm run dev:server) or configure Supabase in Setup.'
         );
       }
 
-      
-// Prefer Supabase client invoke (handles correct domain + headers + CORS better than raw fetch)
-const client = getSupabaseClient();
-if (!client) {
-  throw new Error('Supabase client not available. Save & Reload your Supabase config.');
-}
+      const client = getSupabaseClient();
+      if (!client) {
+        throw new Error('Supabase client not available. Save & Reload your Supabase config.');
+      }
 
-const maxAttempts = 3;
-let lastError: Error | null = null;
-let data: Record<string, unknown> | null = null;
+      const maxAttempts = 3;
+      let lastError: Error | null = null;
+      let data: Record<string, unknown> | null = null;
 
-for (let attempt = 0; attempt < maxAttempts; attempt++) {
-  try {
-    const { data: fnData, error } = await client.functions.invoke('wordpress-publish', {
-      body,
-    });
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          const { data: fnData, error } = await client.functions.invoke('wordpress-publish', {
+            body,
+          });
 
-    if (error) {
-      throw new Error(error.message || 'Supabase function error');
-    }
+          if (error) {
+            throw new Error(error.message || 'Supabase function error');
+          }
 
-    data = (fnData as any) || null;
-    break;
-  } catch (e) {
-    lastError = e instanceof Error ? e : new Error(String(e));
-    const msg = lastError.message || '';
-    const isRetryable =
-      !msg.toLowerCase().includes('not configured') &&
-      !msg.toLowerCase().includes('invalid wordpress url') &&
-      !msg.toLowerCase().includes('authentication');
+          data = (fnData as any) || null;
+          break;
+        } catch (e) {
+          lastError = e instanceof Error ? e : new Error(String(e));
+          const msg = lastError.message || '';
+          const isRetryable =
+            !msg.toLowerCase().includes('not configured') &&
+            !msg.toLowerCase().includes('invalid wordpress url') &&
+            !msg.toLowerCase().includes('authentication');
 
-    if (attempt < maxAttempts - 1 && isRetryable) {
-      await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
-      continue;
-    }
+          if (attempt < maxAttempts - 1 && isRetryable) {
+            await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+            continue;
+          }
 
-    // Most common browser-side failure is CORS / network (shows as "Failed to fetch")
-    if (msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('network')) {
-      throw new Error(
-        'Failed to publish: Network/CORS blocked the Supabase Edge Function. Ensure you have deployed the `wordpress-publish` function in Supabase, and that it returns proper CORS headers for your Pages domain.'
-      );
-    }
+          if (msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('network')) {
+            throw new Error(
+              'Failed to publish: Network/CORS blocked the request. Ensure the Express server is running or deploy the Supabase Edge Function.'
+            );
+          }
 
-    throw lastError;
-  }
-}
+          throw lastError;
+        }
+      }
 
-if (!data?.success) {
-if (!data?.success) {
+      if (!data?.success) {
         const serverError = (data?.error as string) || '';
         const statusCode = data?.status as number;
         let errorMsg = serverError || lastError?.message || 'Failed to publish to WordPress';
@@ -166,7 +180,7 @@ if (!data?.success) {
       const result: PublishResult = {
         success: true,
         postId: post?.id as number | undefined,
-        postUrl: post?.url as string | undefined,
+        postUrl: (post?.url || post?.link) as string | undefined,
       };
 
       setPublishResult(result);

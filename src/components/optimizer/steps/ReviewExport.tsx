@@ -116,7 +116,7 @@ export function ReviewExport() {
   } = useOptimizerStore();
   
   // Supabase sync for database persistence
-  const { saveToSupabase, isConnected: dbConnected, isLoading: dbLoading, tableMissing, error: dbError } = useSupabaseSyncContext();
+  const { saveToSupabase, isConnected: dbConnected, isLoading: dbLoading, tableMissing, error: dbError, isOfflineMode } = useSupabaseSyncContext();
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
   const [sortField, setSortField] = useState<'title' | 'type' | 'status'>('title');
   const [sortAsc, setSortAsc] = useState(true);
@@ -486,10 +486,11 @@ export function ReviewExport() {
           "flex items-center gap-2 px-3 py-1.5 rounded-lg border",
           dbLoading ? "bg-yellow-500/10 border-yellow-500/30 text-yellow-400" :
           dbConnected ? "bg-green-500/10 border-green-500/30 text-green-400" :
+          isOfflineMode ? "bg-blue-500/10 border-blue-500/30 text-blue-400" :
           "bg-red-500/10 border-red-500/30 text-red-400"
         )}>
           <Database className="w-4 h-4" />
-          <span>{dbLoading ? 'Syncing...' : dbConnected ? 'Database Connected' : 'Database Offline'}</span>
+          <span>{dbLoading ? 'Syncing...' : dbConnected ? 'Database Connected' : isOfflineMode ? 'Local Storage' : 'Database Offline'}</span>
         </div>
       </div>
 
