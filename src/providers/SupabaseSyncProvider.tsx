@@ -85,7 +85,11 @@ class ErrorBoundary extends Component<
 
 export function SupabaseSyncProvider({ children }: SupabaseSyncProviderProps) {
   // Determine configuration dynamically (never freeze at module import)
+<<<<<<< HEAD
   const isSupabaseConfigured = getSupabaseConfig().configured;
+=======
+  
+>>>>>>> ede78cf (fix: stop SupabaseSyncProvider crash (remove undefined isSupabaseConfigured))
 
   // Use try-catch wrapper for hook initialization
   let sync: SupabaseSyncContextType;
@@ -98,7 +102,7 @@ export function SupabaseSyncProvider({ children }: SupabaseSyncProviderProps) {
       lastSyncTime: hookResult.lastSyncTime,
       error: hookResult.error,
       tableMissing: hookResult.tableMissing,
-      isOfflineMode: hookResult.isOfflineMode ?? !isSupabaseConfigured,
+      isOfflineMode: hookResult.isOfflineMode ?? !getSupabaseConfig().configured,
       saveToSupabase: hookResult.saveToSupabase,
       deleteFromSupabase: hookResult.deleteFromSupabase,
       syncAllToSupabase: hookResult.syncAllToSupabase,

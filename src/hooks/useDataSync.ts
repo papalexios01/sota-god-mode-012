@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useOptimizerStore, type GeneratedContentStore } from '@/lib/store';
 import { getSupabaseConfig } from '@/lib/supabaseClient';
+<<<<<<< HEAD
 import {
   loadAllBlogPosts,
   saveBlogPost,
@@ -11,6 +12,11 @@ import {
 import { toast } from 'sonner';
 
 
+=======
+import { loadAllBlogPosts, saveBlogPost, deleteBlogPost, ensureTableExists, getLastDbCheckError } from '@/lib/api/contentPersistence';
+import { toast } from 'sonner';
+
+>>>>>>> ede78cf (fix: stop SupabaseSyncProvider crash (remove undefined isSupabaseConfigured))
 // SOTA Data Sync Hook with Graceful Degradation
 // This hook manages synchronization between local state and Supabase.
 // When Supabase is not configured, the hook operates in "offline mode"
@@ -59,7 +65,11 @@ export function useDataSync() {
         } else {
           setError(detail?.message || 'Database connection failed.');
         }
+<<<<<<< HEAD
         setTableMissing(true);
+=======
+        setTableMissing(detail?.kind === 'missing_table');
+>>>>>>> ede78cf (fix: stop SupabaseSyncProvider crash (remove undefined isSupabaseConfigured))
         setIsConnected(false);
         setIsLoading(false);
         return;
@@ -124,7 +134,7 @@ export function useDataSync() {
         setLastSyncTime(new Date());
         setTableMissing(false);
       } else {
-        setTableMissing(true);
+        setTableMissing(detail?.kind === 'missing_table');
       }
       return success;
     } catch (err) {
