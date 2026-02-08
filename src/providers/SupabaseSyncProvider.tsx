@@ -84,6 +84,9 @@ class ErrorBoundary extends Component<
 }
 
 export function SupabaseSyncProvider({ children }: SupabaseSyncProviderProps) {
+  // Determine configuration dynamically (never freeze at module import)
+  const isSupabaseConfigured = getSupabaseConfig().configured;
+
   // Use try-catch wrapper for hook initialization
   let sync: SupabaseSyncContextType;
 
