@@ -8,6 +8,8 @@
     "dev:server": "tsx server/index.ts",
     "dev:client": "vite",
     "build": "vite build",
+    "install:server": "cd server && npm install",
+    "postinstall:local": "cd server && npm install",
     "preview": "vite preview",
     "db:push": "drizzle-kit push",
     "lint": "eslint .",
@@ -48,18 +50,5 @@
     "typescript": "^5.9.3",
     "vite": "^5.4.21",
     "vitest": "^1.0.0"
-  },
-  "optionalDependencies": {
-    "@anthropic-ai/sdk": "^0.66.0",
-    "@google/genai": "^1.38.0",
-    "@types/express": "^5.0.6",
-    "@types/pg": "^8.16.0",
-    "drizzle-kit": "^0.31.8",
-    "drizzle-orm": "^0.45.1",
-    "esbuild": "^0.27.2",
-    "express": "^5.2.1",
-    "openai": "^4.104.0",
-    "pg": "^8.18.0",
-    "tsx": "^4.21.0"
   }
 }
