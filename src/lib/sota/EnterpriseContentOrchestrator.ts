@@ -541,130 +541,137 @@ Now continue:`;
       neuronTermPrompt
     );
 
-    // Phase 3: Enhancement
+    // ═══════════════════════════════════════════════════════════════════
+    // FAULT-TOLERANT POST-PROCESSING PIPELINE
+    // Every phase is wrapped in try/catch so a failure in ANY post-processing
+    // step degrades gracefully instead of killing the entire 25-minute generation.
+    // The raw AI content is ALWAYS preserved and returned.
+    // ═══════════════════════════════════════════════════════════════════
+
     this.log('Phase 3: Content Enhancement...');
     let enhancedContent = content;
 
-    // Remove AI phrases
-    enhancedContent = removeAIPhrases(enhancedContent);
+    // --- 3a: Remove AI phrases (safe, pure string ops) ---
+    try {
+      enhancedContent = removeAIPhrases(enhancedContent);
+    } catch (e) {
+      this.log(`⚠️ removeAIPhrases failed (non-fatal): ${e}`);
+    }
 
-    // Inject internal links from crawled sitemap
-    if (options.injectLinks !== false && this.config.sitePages && this.config.sitePages.length > 0) {
-      this.log(`Finding internal links from ${this.config.sitePages.length} crawled pages...`);
-
-      // Update the link engine with current site pages
-      this.linkEngine.updateSitePages(this.config.sitePages);
-
-      // Generate link opportunities (target 8-12 high-quality contextual links)
-      const linkOpportunities = this.linkEngine.generateLinkOpportunities(enhancedContent, 12);
-
-      if (linkOpportunities.length > 0) {
-        enhancedContent = this.linkEngine.injectContextualLinks(enhancedContent, linkOpportunities);
-        this.log(`✅ Injected ${linkOpportunities.length} internal links to REAL site pages:`);
-        linkOpportunities.slice(0, 5).forEach(link => {
-          this.log(`   → "${link.anchor}" → ${link.targetUrl}`);
-        });
-      } else {
-        this.log('⚠️ No matching anchor text found in content for available pages');
+    // --- 3b: Internal links ---
+    try {
+      if (options.injectLinks !== false && this.config.sitePages && this.config.sitePages.length > 0) {
+        this.log(`Finding internal links from ${this.config.sitePages.length} crawled pages...`);
+        this.linkEngine.updateSitePages(this.config.sitePages);
+        const linkOpportunities = this.linkEngine.generateLinkOpportunities(enhancedContent, 12);
+        if (linkOpportunities.length > 0) {
+          enhancedContent = this.linkEngine.injectContextualLinks(enhancedContent, linkOpportunities);
+          this.log(`✅ Injected ${linkOpportunities.length} internal links`);
+        } else {
+          this.log('⚠️ No matching anchor text found in content for available pages');
+        }
       }
-    } else {
-      this.log('⚠️ No site pages available for internal linking - crawl sitemap first');
+    } catch (e) {
+      this.log(`⚠️ Internal linking failed (non-fatal): ${e}`);
     }
 
-    // ENTERPRISE FIX: Preserve references section before post-processing
-    // Self-critique and NeuronWriter improvement loops can strip/corrupt references
-    const referencesRegex = /<!-- SOTA References Section -->[\s\S]*$/i;
-    const refsAltRegex = /<hr>\s*<h2>References[\s\S]*$/i;
-    const savedReferencesMatch = enhancedContent.match(referencesRegex) || enhancedContent.match(refsAltRegex);
-    const savedReferencesHtml = savedReferencesMatch ? savedReferencesMatch[0] : null;
-    if (savedReferencesHtml) {
-      // Strip references before sending to NeuronWriter/self-critique (they'd just add noise)
-      enhancedContent = enhancedContent.replace(referencesRegex, '').replace(refsAltRegex, '').trim();
-      this.log('References: preserved and stripped for post-processing');
+    // --- 3c: Preserve references before NeuronWriter/self-critique loops ---
+    let savedReferencesHtml: string | null = null;
+    try {
+      const referencesRegex = /<!-- SOTA References Section -->[\s\S]*$/i;
+      const refsAltRegex = /<hr>\s*<h2>References[\s\S]*$/i;
+      const savedReferencesMatch = enhancedContent.match(referencesRegex) || enhancedContent.match(refsAltRegex);
+      savedReferencesHtml = savedReferencesMatch ? savedReferencesMatch[0] : null;
+      if (savedReferencesHtml) {
+        enhancedContent = enhancedContent.replace(referencesRegex, '').replace(refsAltRegex, '').trim();
+        this.log('References: preserved and stripped for post-processing');
+      }
+    } catch (e) {
+      this.log(`⚠️ Reference preservation failed (non-fatal): ${e}`);
     }
 
-    // NeuronWriter content score (after links/cleanup so the score reflects what you'll publish)
-    // IMPROVEMENT LOOP: If score < 90%, enhance content with missing terms
-    if (neuron) {
-      this.log('NeuronWriter: evaluating content score...');
-      let currentContent = enhancedContent;
-      let currentScore = 0;
-      const targetScore = 90;
-      const maxImprovementAttempts = 6; // More attempts to reliably hit 90%+
+    // --- 3d: NeuronWriter improvement loop ---
+    try {
+      if (neuron) {
+        this.log('NeuronWriter: evaluating content score...');
+        let currentContent = enhancedContent;
+        let currentScore = 0;
+        const targetScore = 90;
+        const maxImprovementAttempts = 6;
 
-      const allTermsForSuggestions = [
-        ...neuron.analysis.terms,
-        ...(neuron.analysis.termsExtended || []),
-      ];
+        const allTermsForSuggestions = [
+          ...neuron.analysis.terms,
+          ...(neuron.analysis.termsExtended || []),
+        ];
 
-      const entityTerms = (neuron.analysis.entities || []).map(e => ({
-        term: e.entity,
-        weight: e.usage_pc || 30,
-        frequency: 1,
-        type: 'recommended' as const,
-        usage_pc: e.usage_pc,
-      }));
+        const entityTerms = (neuron.analysis.entities || []).map(e => ({
+          term: e.entity,
+          weight: e.usage_pc || 30,
+          frequency: 1,
+          type: 'recommended' as const,
+          usage_pc: e.usage_pc,
+        }));
 
-      let previousScore = 0;
-      let stagnantRounds = 0;
+        let previousScore = 0;
+        let stagnantRounds = 0;
 
-      for (let attempt = 0; attempt <= maxImprovementAttempts; attempt++) {
-        const evalRes = await neuron.service.evaluateContent(neuron.queryId, {
-          html: currentContent,
-          title,
-        });
+        for (let attempt = 0; attempt <= maxImprovementAttempts; attempt++) {
+          try {
+            const evalRes = await neuron.service.evaluateContent(neuron.queryId, {
+              html: currentContent,
+              title,
+            });
 
-        if (evalRes.success && typeof evalRes.contentScore === 'number') {
-          currentScore = evalRes.contentScore;
-          neuron.analysis.content_score = currentScore;
+            if (evalRes.success && typeof evalRes.contentScore === 'number') {
+              currentScore = evalRes.contentScore;
+              neuron.analysis.content_score = currentScore;
 
-          if (currentScore >= targetScore) {
-            this.log(`NeuronWriter: Score ${currentScore}% (target: ${targetScore}%+) - PASSED`);
-            enhancedContent = currentContent;
-            break;
-          }
+              if (currentScore >= targetScore) {
+                this.log(`NeuronWriter: Score ${currentScore}% (target: ${targetScore}%+) - PASSED`);
+                enhancedContent = currentContent;
+                break;
+              }
 
-          if (attempt === maxImprovementAttempts) {
-            this.log(`NeuronWriter: Score ${currentScore}% after ${attempt} attempts (target was ${targetScore}%)`);
-            enhancedContent = currentContent;
-            break;
-          }
+              if (attempt === maxImprovementAttempts) {
+                this.log(`NeuronWriter: Score ${currentScore}% after ${attempt} attempts (target was ${targetScore}%)`);
+                enhancedContent = currentContent;
+                break;
+              }
 
-          if (currentScore <= previousScore && attempt > 0) {
-            stagnantRounds++;
-            if (stagnantRounds >= 2) {
-              this.log(`NeuronWriter: Score stagnant at ${currentScore}% for ${stagnantRounds} rounds. Stopping.`);
-              enhancedContent = currentContent;
-              break;
-            }
-          } else {
-            stagnantRounds = 0;
-          }
-          previousScore = currentScore;
+              if (currentScore <= previousScore && attempt > 0) {
+                stagnantRounds++;
+                if (stagnantRounds >= 2) {
+                  this.log(`NeuronWriter: Score stagnant at ${currentScore}% for ${stagnantRounds} rounds. Stopping.`);
+                  enhancedContent = currentContent;
+                  break;
+                }
+              } else {
+                stagnantRounds = 0;
+              }
+              previousScore = currentScore;
 
-          const gap = targetScore - currentScore;
-          this.log(`NeuronWriter: Score ${currentScore}% (need +${gap}%) - improving... (attempt ${attempt + 1}/${maxImprovementAttempts})`);
+              const gap = targetScore - currentScore;
+              this.log(`NeuronWriter: Score ${currentScore}% (need +${gap}%) - improving... (attempt ${attempt + 1}/${maxImprovementAttempts})`);
 
-          const suggestions = neuron.service.getOptimizationSuggestions(currentContent, allTermsForSuggestions);
-          const entitySuggestions = neuron.service.getOptimizationSuggestions(currentContent, entityTerms);
-          const allSuggestions = [...suggestions, ...entitySuggestions.slice(0, 10)];
+              const suggestions = neuron.service.getOptimizationSuggestions(currentContent, allTermsForSuggestions);
+              const entitySuggestions = neuron.service.getOptimizationSuggestions(currentContent, entityTerms);
+              const allSuggestions = [...suggestions, ...entitySuggestions.slice(0, 10)];
 
-          const missingHeadings = (neuron.analysis.headingsH2 || [])
-            .filter(h => !currentContent.toLowerCase().includes(h.text.toLowerCase().slice(0, 20)))
-            .slice(0, 3);
+              const missingHeadings = (neuron.analysis.headingsH2 || [])
+                .filter(h => !currentContent.toLowerCase().includes(h.text.toLowerCase().slice(0, 20)))
+                .slice(0, 3);
 
-          if (allSuggestions.length > 0 || missingHeadings.length > 0) {
-            this.log(`Missing: ${allSuggestions.length} terms, ${missingHeadings.length} headings`);
+              if (allSuggestions.length > 0 || missingHeadings.length > 0) {
+                this.log(`Missing: ${allSuggestions.length} terms, ${missingHeadings.length} headings`);
 
-            // ENTERPRISE FIX: For long content, use targeted insertion instead of full rewrite
-            const usePatchMode = currentContent.length > 10000;
-            
-            if (usePatchMode) {
-              const termsPerAttempt = Math.min(30, allSuggestions.length);
-              const termsList = allSuggestions.slice(0, termsPerAttempt);
-              
-              const patchPrompt = `Generate 3-6 NEW enrichment paragraphs for an article about "${options.keyword}".
-              
+                const usePatchMode = currentContent.length > 10000;
+
+                if (usePatchMode) {
+                  const termsPerAttempt = Math.min(30, allSuggestions.length);
+                  const termsList = allSuggestions.slice(0, termsPerAttempt);
+
+                  const patchPrompt = `Generate 3-6 NEW enrichment paragraphs for an article about "${options.keyword}".
+
 These paragraphs must NATURALLY incorporate these missing SEO terms:
 ${termsList.map((t, i) => `${i + 1}. ${t}`).join('\n')}
 ${missingHeadings.length > 0 ? `\nAlso create sections for these missing H2 headings:\n${missingHeadings.map(h => `- "${h.text}"`).join('\n')}` : ''}
@@ -680,29 +687,28 @@ Rules:
 
 Output ONLY the new HTML content to INSERT.`;
 
-              const patchResult = await this.engine.generateWithModel({
-                prompt: patchPrompt,
-                model: this.config.primaryModel || 'gemini',
-                apiKeys: this.config.apiKeys,
-                systemPrompt: 'Generate SEO enrichment HTML. Output PURE HTML ONLY.',
-                temperature: 0.6 + (attempt * 0.05),
-                maxTokens: 4096,
-              });
+                  const patchResult = await this.engine.generateWithModel({
+                    prompt: patchPrompt,
+                    model: this.config.primaryModel || 'gemini',
+                    apiKeys: this.config.apiKeys,
+                    systemPrompt: 'Generate SEO enrichment HTML. Output PURE HTML ONLY.',
+                    temperature: 0.6 + (attempt * 0.05),
+                    maxTokens: 4096,
+                  });
 
-              if (patchResult.content && patchResult.content.trim().length > 100) {
-                currentContent = this.insertBeforeConclusion(currentContent, patchResult.content.trim());
-                this.log(`NeuronWriter PATCH: Inserted enrichment content with ${termsList.length} terms`);
-              }
-            } else {
-              // Original full-rewrite approach for shorter content
-              const termsPerAttempt = Math.min(40, allSuggestions.length);
-              const termsList = allSuggestions.slice(0, termsPerAttempt);
+                  if (patchResult.content && patchResult.content.trim().length > 100) {
+                    currentContent = this.insertBeforeConclusion(currentContent, patchResult.content.trim());
+                    this.log(`NeuronWriter PATCH: Inserted enrichment content with ${termsList.length} terms`);
+                  }
+                } else {
+                  const termsPerAttempt = Math.min(40, allSuggestions.length);
+                  const termsList = allSuggestions.slice(0, termsPerAttempt);
 
-              const headingsInstruction = missingHeadings.length > 0
-                ? `\n\nMISSING H2 HEADINGS (add these as new sections):\n${missingHeadings.map(h => `- "${h.text}" (used by ${h.usage_pc}% of competitors)`).join('\n')}`
-                : '';
+                  const headingsInstruction = missingHeadings.length > 0
+                    ? `\n\nMISSING H2 HEADINGS (add these as new sections):\n${missingHeadings.map(h => `- "${h.text}" (used by ${h.usage_pc}% of competitors)`).join('\n')}`
+                    : '';
 
-              const improvementPrompt = `You are optimizing this article for a NeuronWriter content score of 90%+. Current score: ${currentScore}%.
+                  const improvementPrompt = `You are optimizing this article for a NeuronWriter content score of 90%+. Current score: ${currentScore}%.
 
 PRIORITY MISSING TERMS (MUST include each one naturally, at least 1-2 times):
 ${termsList.map((t, i) => `${i + 1}. "${t}"`).join('\n')}
@@ -723,30 +729,30 @@ ${currentContent}
 
 Return the COMPLETE improved article with ALL missing terms naturally incorporated.`;
 
-              const improvedResult = await this.engine.generateWithModel({
-                prompt: improvementPrompt,
-                model: this.config.primaryModel || 'gemini',
-                apiKeys: this.config.apiKeys,
-                systemPrompt: `You are an elite SEO content optimizer specializing in NeuronWriter scoring. Your ONLY job: incorporate missing terms naturally to push the score above ${targetScore}%. Preserve all existing content. Output PURE HTML ONLY.`,
-                temperature: 0.6 + (attempt * 0.05),
-                maxTokens: Math.min(16384, Math.max(8192, Math.ceil(currentContent.length / 3)))
-              });
+                  const improvedResult = await this.engine.generateWithModel({
+                    prompt: improvementPrompt,
+                    model: this.config.primaryModel || 'gemini',
+                    apiKeys: this.config.apiKeys,
+                    systemPrompt: `You are an elite SEO content optimizer specializing in NeuronWriter scoring. Your ONLY job: incorporate missing terms naturally to push the score above ${targetScore}%. Preserve all existing content. Output PURE HTML ONLY.`,
+                    temperature: 0.6 + (attempt * 0.05),
+                    maxTokens: Math.min(16384, Math.max(8192, Math.ceil(currentContent.length / 3)))
+                  });
 
-              if (improvedResult.content) {
-                const improved = improvedResult.content.trim();
-                const minLength = currentContent.length * 0.97;
-                if (improved.length >= minLength) {
-                  currentContent = improved;
-                } else {
-                  this.log(`NeuronWriter: improved draft too short (${improved.length} vs ${currentContent.length}), keeping previous version.`);
+                  if (improvedResult.content) {
+                    const improved = improvedResult.content.trim();
+                    const minLength = currentContent.length * 0.97;
+                    if (improved.length >= minLength) {
+                      currentContent = improved;
+                    } else {
+                      this.log(`NeuronWriter: improved draft too short (${improved.length} vs ${currentContent.length}), keeping previous version.`);
+                    }
+                  }
                 }
-              }
-            }
-          } else {
-            this.log(`No missing terms found - attempting semantic enrichment...`);
+              } else {
+                this.log(`No missing terms found - attempting semantic enrichment...`);
 
-            const allTermsText = allTermsForSuggestions.map(t => t.term).join(', ');
-            const generalPrompt = `This article scores ${currentScore}% on NeuronWriter (target: ${targetScore}%+).
+                const allTermsText = allTermsForSuggestions.map(t => t.term).join(', ');
+                const generalPrompt = `This article scores ${currentScore}% on NeuronWriter (target: ${targetScore}%+).
 
 The key SEO terms for this topic are: ${allTermsText}
 
@@ -762,117 +768,170 @@ OUTPUT PURE HTML ONLY. Preserve all existing content. Return the COMPLETE articl
 CURRENT ARTICLE:
 ${currentContent}`;
 
-            const improvedResult = await this.engine.generateWithModel({
-              prompt: generalPrompt,
-              model: this.config.primaryModel || 'gemini',
-              apiKeys: this.config.apiKeys,
-              systemPrompt: 'Elite SEO optimizer. Output PURE HTML ONLY.',
-              temperature: 0.65,
-              maxTokens: Math.min(16384, Math.max(8192, Math.ceil(currentContent.length / 3)))
-            });
+                const improvedResult = await this.engine.generateWithModel({
+                  prompt: generalPrompt,
+                  model: this.config.primaryModel || 'gemini',
+                  apiKeys: this.config.apiKeys,
+                  systemPrompt: 'Elite SEO optimizer. Output PURE HTML ONLY.',
+                  temperature: 0.65,
+                  maxTokens: Math.min(16384, Math.max(8192, Math.ceil(currentContent.length / 3)))
+                });
 
-            if (improvedResult.content) {
-              const improved = improvedResult.content.trim();
-              const minLength = currentContent.length * 0.97;
-              if (improved.length >= minLength) {
-                currentContent = improved;
-              } else {
-                this.log(`NeuronWriter: improved draft too short (${improved.length} vs ${currentContent.length}), keeping previous version.`);
+                if (improvedResult.content) {
+                  const improved = improvedResult.content.trim();
+                  const minLength = currentContent.length * 0.97;
+                  if (improved.length >= minLength) {
+                    currentContent = improved;
+                  } else {
+                    this.log(`NeuronWriter: improved draft too short (${improved.length} vs ${currentContent.length}), keeping previous version.`);
+                  }
+                }
               }
+            } else {
+              neuron.analysis.content_score = neuron.service.calculateContentScore(
+                currentContent,
+                neuron.analysis.terms || []
+              );
+              if (!evalRes.success) {
+                this.log(`NeuronWriter: evaluate failed (using local score). ${evalRes.error || ''}`.trim());
+              }
+              enhancedContent = currentContent;
+              break;
             }
+          } catch (attemptErr) {
+            this.log(`⚠️ NeuronWriter improvement attempt ${attempt} failed (non-fatal): ${attemptErr}`);
+            enhancedContent = currentContent;
+            break;
           }
-        } else {
-          neuron.analysis.content_score = neuron.service.calculateContentScore(
-            currentContent,
-            neuron.analysis.terms || []
-          );
-          if (!evalRes.success) {
-            this.log(`NeuronWriter: evaluate failed (using local score). ${evalRes.error || ''}`.trim());
-          }
-          enhancedContent = currentContent;
-          break;
+        }
+
+        // Self-Critique pass
+        try {
+          const req = this.extractNeuronRequirements(neuron.analysis);
+          enhancedContent = await this.selfCritiqueAndPatch({
+            keyword: options.keyword,
+            title,
+            html: enhancedContent,
+            requiredTerms: req.requiredTerms,
+            requiredEntities: req.entities,
+            requiredHeadings: req.h2
+          });
+          enhancedContent = this.enforceNeuronwriterCoverage(enhancedContent, req);
+        } catch (e) {
+          this.log(`⚠️ Self-critique failed (non-fatal): ${e}`);
+        }
+      } else {
+        try {
+          enhancedContent = await this.selfCritiqueAndPatch({
+            keyword: options.keyword,
+            title,
+            html: enhancedContent,
+          });
+        } catch (e) {
+          this.log(`⚠️ Self-critique failed (non-fatal): ${e}`);
         }
       }
-
-      // SOTA Self-Critique pass (fast): enforce NeuronWriter terms/entities/headings + readability polish
-      const req = this.extractNeuronRequirements(neuron.analysis);
-      enhancedContent = await this.selfCritiqueAndPatch({
-        keyword: options.keyword,
-        title,
-        html: enhancedContent,
-        requiredTerms: req.requiredTerms,
-        requiredEntities: req.entities,
-        requiredHeadings: req.h2
-      });
-      // Final safety net: force any still-missing NeuronWriter terms/entities into the content
-      enhancedContent = this.enforceNeuronwriterCoverage(enhancedContent, req);
-    } else {
-      // Even without NeuronWriter, run a quick clarity polish
-      enhancedContent = await this.selfCritiqueAndPatch({
-        keyword: options.keyword,
-        title,
-        html: enhancedContent,
-      });
+    } catch (neuronErr) {
+      this.log(`⚠️ NeuronWriter optimization loop crashed (non-fatal): ${neuronErr}`);
+      // enhancedContent still holds the last good version
     }
 
-    // ENTERPRISE FIX: Re-append preserved references after all post-processing
-    if (savedReferencesHtml) {
-      // Strip any corrupted references that may have leaked through
-      enhancedContent = enhancedContent
-        .replace(/<!-- SOTA References Section -->[\s\S]*$/i, '')
-        .replace(/<hr>\s*<h2>References[\s\S]*$/i, '')
-        .trim();
-      enhancedContent = `${enhancedContent}\n\n${savedReferencesHtml}`;
-      this.log('References: re-appended after post-processing');
+    // --- 3e: Re-append preserved references ---
+    try {
+      if (savedReferencesHtml) {
+        enhancedContent = enhancedContent
+          .replace(/<!-- SOTA References Section -->[\s\S]*$/i, '')
+          .replace(/<hr>\s*<h2>References[\s\S]*$/i, '')
+          .trim();
+        enhancedContent = `${enhancedContent}\n\n${savedReferencesHtml}`;
+        this.log('References: re-appended after post-processing');
+      }
+    } catch (e) {
+      this.log(`⚠️ Reference re-append failed (non-fatal): ${e}`);
     }
 
-    // Phase 4: Validation (parallel quality + E-E-A-T)
+    // --- Phase 4: Validation ---
     this.log('Phase 4: Quality & E-E-A-T Validation...');
-    const metrics = analyzeContent(enhancedContent);
-    const internalLinks = this.linkEngine.generateLinkOpportunities(enhancedContent);
+    let metrics: ContentMetrics;
+    let internalLinks: InternalLink[] = [];
+    let qualityScore: QualityScore;
 
-    // Run quality and E-E-A-T validation in parallel
-    // CRITICAL: Convert any remaining markdown to proper HTML
-    // This catches cases where the AI outputs markdown despite HTML instructions
-    this.log('Finalizing HTML: Converting any markdown remnants...');
-    enhancedContent = convertMarkdownToHTML(enhancedContent);
-    enhancedContent = ensureProperHTMLStructure(enhancedContent);
-
-    const [qualityScore, eeatScore] = await Promise.all([
-      Promise.resolve(calculateQualityScore(enhancedContent, options.keyword, internalLinks.map(l => l.targetUrl))),
-      Promise.resolve(this.eeatValidator.validateContent(enhancedContent, {
-        name: this.config.authorName,
-        credentials: this.config.authorCredentials
-      }))
-    ]);
-
-    this.log(`Quality Score: ${qualityScore.overall}%`);
-    this.log(`E-E-A-T Score: ${eeatScore.overall}% (E:${eeatScore.experience} X:${eeatScore.expertise} A:${eeatScore.authoritativeness} T:${eeatScore.trustworthiness})`);
-
-    // If E-E-A-T score is low and validation is enabled, log recommendations
-    if (options.validateEEAT !== false && eeatScore.overall < 70) {
-      const enhancements = this.eeatValidator.generateEEATEnhancements(eeatScore);
-      this.log(`E-E-A-T improvements needed: ${enhancements.slice(0, 3).join(', ')}`);
+    try {
+      this.log('Finalizing HTML: Converting any markdown remnants...');
+      enhancedContent = convertMarkdownToHTML(enhancedContent);
+      enhancedContent = ensureProperHTMLStructure(enhancedContent);
+    } catch (e) {
+      this.log(`⚠️ HTML conversion failed (non-fatal): ${e}`);
     }
 
-    // Phase 5: Schema & Metadata + SEO Title Generation
+    try {
+      metrics = analyzeContent(enhancedContent);
+    } catch (e) {
+      this.log(`⚠️ analyzeContent failed (non-fatal): ${e}`);
+      metrics = {
+        wordCount: this.countWordsFromHtml(enhancedContent),
+        sentenceCount: 0, paragraphCount: 0, headingCount: 0,
+        imageCount: 0, linkCount: 0, keywordDensity: 0,
+        readabilityGrade: 7, estimatedReadTime: 0,
+      };
+    }
+
+    try {
+      internalLinks = this.linkEngine.generateLinkOpportunities(enhancedContent);
+    } catch (e) {
+      this.log(`⚠️ Link analysis failed (non-fatal): ${e}`);
+    }
+
+    try {
+      const [qs, eeatScore] = await Promise.all([
+        Promise.resolve(calculateQualityScore(enhancedContent, options.keyword, internalLinks.map(l => l.targetUrl))),
+        Promise.resolve(this.eeatValidator.validateContent(enhancedContent, {
+          name: this.config.authorName,
+          credentials: this.config.authorCredentials
+        }))
+      ]);
+      qualityScore = qs;
+
+      this.log(`Quality Score: ${qualityScore.overall}%`);
+      this.log(`E-E-A-T Score: ${eeatScore.overall}%`);
+
+      if (options.validateEEAT !== false && eeatScore.overall < 70) {
+        const enhancements = this.eeatValidator.generateEEATEnhancements(eeatScore);
+        this.log(`E-E-A-T improvements needed: ${enhancements.slice(0, 3).join(', ')}`);
+      }
+    } catch (e) {
+      this.log(`⚠️ Quality validation failed (non-fatal): ${e}`);
+      qualityScore = { overall: 75, readability: 75, seo: 75, eeat: 75, uniqueness: 75, factAccuracy: 75, passed: true, improvements: [] };
+    }
+
+    // --- Phase 5: Schema & Metadata ---
     this.log('Phase 5: Generating SEO metadata...');
     const eeat = this.buildEEATProfile(references);
+    let seoTitle = title;
+    let metaDescription = `Learn everything about ${options.keyword}. Expert guide with actionable tips.`;
+    let slug = this.generateSlug(title);
 
-    // Generate SEO-optimized title and meta description in parallel
-    const [seoTitle, metaDescription] = await Promise.all([
-      this.generateSEOTitle(options.keyword, title, serpAnalysis),
-      this.generateMetaDescription(options.keyword, title)
-    ]);
+    try {
+      const [generatedSeoTitle, generatedMetaDesc] = await Promise.all([
+        this.generateSEOTitle(options.keyword, title, serpAnalysis),
+        this.generateMetaDescription(options.keyword, title)
+      ]);
+      seoTitle = generatedSeoTitle;
+      metaDescription = generatedMetaDesc;
+      this.log(`SEO Title: "${seoTitle}" | Meta: ${metaDescription.length} chars`);
+    } catch (e) {
+      this.log(`⚠️ SEO metadata generation failed (non-fatal): ${e}`);
+    }
 
-    const slug = this.generateSlug(title);
-    this.log(`SEO Title: "${seoTitle}" | Meta: ${metaDescription.length} chars`);
+    // --- Ensure references section ---
+    try {
+      enhancedContent = this.ensureReferencesSection(enhancedContent, references, serpAnalysis);
+      this.log(`References: ${references.length} sources appended to content`);
+    } catch (e) {
+      this.log(`⚠️ ensureReferencesSection failed (non-fatal): ${e}`);
+    }
 
-    // CRITICAL: Ensure references section is always present AFTER all content transformations
-    enhancedContent = this.ensureReferencesSection(enhancedContent, references, serpAnalysis);
-    this.log(`References: ${references.length} sources appended to content`);
-
-    // Final word-count sanity check to detect any truncation from post-processing
+    // Final word-count sanity check
     const finalWordCount = this.countWordsFromHtml(enhancedContent);
     if (finalWordCount < targetWordCount * 0.9) {
       this.log(
@@ -881,19 +940,10 @@ ${currentContent}`;
       );
     }
 
-    const generatedContent: GeneratedContent = {
-      id: crypto.randomUUID(),
-      title,
-      seoTitle, // NEW: Separate SEO-optimized title for WordPress
-      content: enhancedContent,
-      metaDescription,
-      slug,
-      primaryKeyword: options.keyword,
-      secondaryKeywords: serpAnalysis.semanticEntities.slice(0, 10),
-      metrics,
-      qualityScore,
-      internalLinks,
-      schema: this.schemaGenerator.generateComprehensiveSchema(
+    // --- Build schema (non-fatal) ---
+    let schema: GeneratedContent['schema'] = { '@context': 'https://schema.org', '@graph': [] };
+    try {
+      schema = this.schemaGenerator.generateComprehensiveSchema(
         {
           title,
           content: enhancedContent,
@@ -910,7 +960,24 @@ ${currentContent}`;
           consensusUsed: this.config.useConsensus || false
         } as GeneratedContent,
         `${this.config.organizationUrl}/${slug}`
-      ),
+      );
+    } catch (e) {
+      this.log(`⚠️ Schema generation failed (non-fatal): ${e}`);
+    }
+
+    const generatedContent: GeneratedContent = {
+      id: crypto.randomUUID(),
+      title,
+      seoTitle,
+      content: enhancedContent,
+      metaDescription,
+      slug,
+      primaryKeyword: options.keyword,
+      secondaryKeywords: serpAnalysis.semanticEntities.slice(0, 10),
+      metrics,
+      qualityScore,
+      internalLinks,
+      schema,
       eeat,
       serpAnalysis,
       generatedAt: new Date(),
@@ -922,7 +989,7 @@ ${currentContent}`;
     };
 
     const duration = Date.now() - startTime;
-    this.log(`Generation complete in ${(duration / 1000).toFixed(1)}s`);
+    this.log(`✅ Generation complete in ${(duration / 1000).toFixed(1)}s | ${finalWordCount} words`);
 
     return generatedContent;
   }

@@ -396,12 +396,16 @@ export function ReviewExport() {
           keyword: item.primaryKeyword,
         });
       } catch (error) {
-        const errorMsg = String(error);
+        const errorMsg = error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error) || 'Unknown generation error';
+        console.error(`[ReviewExport] Generation failed for "${item.title}":`, error);
         updateContentItem(item.id, { status: 'error', error: errorMsg });
         setGeneratingItems(prev => prev.map(gi =>
           gi.id === item.id ? { ...gi, status: 'error', error: errorMsg } : gi
         ));
         setGenerationError(errorMsg);
+        toast.error(`Generation failed: ${errorMsg.slice(0, 200)}`);
       }
 
       completed++;
