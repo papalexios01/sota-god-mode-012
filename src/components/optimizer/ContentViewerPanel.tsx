@@ -51,6 +51,7 @@ interface ContentViewerPanelProps {
   onNext?: () => void;
   hasPrevious?: boolean;
   hasNext?: boolean;
+  onSaveContent?: (itemId: string, newContent: string) => void;
 }
 
 type ViewTab = 'preview' | 'editor' | 'html' | 'seo' | 'schema' | 'links' | 'neuron';
@@ -63,7 +64,8 @@ export function ContentViewerPanel({
   onPrevious,
   onNext,
   hasPrevious,
-  hasNext
+  hasNext,
+  onSaveContent
 }: ContentViewerPanelProps) {
   const [activeTab, setActiveTab] = useState<ViewTab>('preview');
   const [copied, setCopied] = useState(false);
@@ -223,6 +225,13 @@ export function ContentViewerPanel({
     setHistoryIndex(0);
     toast.info('Editor reset to original content');
   }, [content]);
+
+  const handleSaveContent = useCallback(() => {
+    if (!item || !onSaveContent || !isEditorDirty) return;
+    onSaveContent(item.id, editedContent);
+    setIsEditorDirty(false);
+    toast.success('Content saved successfully!');
+  }, [item, onSaveContent, isEditorDirty, editedContent]);
 
   const insertHtmlTag = useCallback((tag: string, attributes: string = '') => {
     const selection = window.getSelection();
@@ -506,6 +515,16 @@ export function ContentViewerPanel({
                         <Copy className="w-4 h-4" />
                         Copy
                       </button>
+                      {onSaveContent && (
+                        <button
+                          onClick={handleSaveContent}
+                          disabled={!isEditorDirty}
+                          className="flex items-center gap-1.5 px-4 py-1.5 bg-green-600 text-white hover:bg-green-700 rounded-lg text-sm font-semibold transition-all disabled:opacity-30 disabled:cursor-not-allowed shadow-sm"
+                        >
+                          <Save className="w-4 h-4" />
+                          Save Changes
+                        </button>
+                      )}
                     </div>
                   </div>
                   

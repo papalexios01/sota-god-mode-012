@@ -191,7 +191,7 @@ export class SOTAInternalLinkEngine {
               overlapMeaningfulCount,
               titleRun
             );
-            if (score < 62) continue;
+            if (score < 68) continue;
 
             const startIndex = span[0].startIndex;
             const endIndex = span[span.length - 1].endIndex;
@@ -278,6 +278,12 @@ export class SOTAInternalLinkEngine {
     titleRun: number
   ): number {
     let score = 0;
+
+    // RELEVANCE GATE: At least 50% of meaningful anchor tokens must match the page
+    const overlapRatio = meaningfulAnchorTokens.length > 0 
+      ? meaningfulAnchorTokens.filter(t => topic.tokenSet.has(t)).length / meaningfulAnchorTokens.length
+      : 0;
+    if (overlapRatio < 0.5) return 0;
 
     // Token overlap (IDF-weighted) = relevance
     const overlap = meaningfulAnchorTokens.filter(t => topic.tokenSet.has(t));
@@ -375,37 +381,21 @@ export class SOTAInternalLinkEngine {
     // Split content into sections by <h2 tags for zone-based distribution
     const sectionSplitRegex = /(?=<h2[\s>])/gi;
     const sections = content.split(sectionSplitRegex).filter(s => s.length > 0);
-
-    // Assign each section to a zone: beginning, middle, end
     const totalSections = sections.length;
-    const getZone = (idx: number): string => {
-      if (totalSections <= 1) return 'middle';
-      const ratio = idx / (totalSections - 1);
-      if (ratio < 0.33) return 'beginning';
-      if (ratio < 0.67) return 'middle';
-      return 'end';
-    };
 
-    const zoneLinksCount = new Map<string, number>([
-      ['beginning', 0], ['middle', 0], ['end', 0]
-    ]);
+    // Calculate ideal links per section for even distribution
+    const maxLinksPerSection = Math.max(1, Math.ceil(links.length / Math.max(totalSections, 1)));
+    // Hard cap: never more than 2 links in a single section
+    const capPerSection = Math.min(maxLinksPerSection, 2);
+
     const sectionLinksCount = new Map<number, number>();
     for (let i = 0; i < totalSections; i++) sectionLinksCount.set(i, 0);
 
-    const maxLinksPerSection = 3;
     const injectedAnchors = new Set<string>();
     let injectedCount = 0;
 
-    // Sort by anchor length (longer first) to avoid partial matches
-    const sortedLinks = [...links].sort((a, b) => (b.anchor?.length || 0) - (a.anchor?.length || 0));
-
-    // Sort sections by zone priority: prefer zones with fewer links
-    const getSectionPriority = (sectionIdx: number): number => {
-      const zone = getZone(sectionIdx);
-      const zoneCount = zoneLinksCount.get(zone) ?? 0;
-      const sectionCount = sectionLinksCount.get(sectionIdx) ?? 0;
-      return zoneCount * 100 + sectionCount;
-    };
+    // Sort links by relevance score (highest first) rather than anchor length
+    const sortedLinks = [...links].sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
 
     for (const link of sortedLinks) {
       const anchor = (link.anchor || '').trim();
@@ -414,12 +404,11 @@ export class SOTAInternalLinkEngine {
 
       const regex = this.buildFlexibleAnchorRegex(anchor);
 
-      // Build candidate list: which sections contain this anchor?
+      // Find ALL sections that contain this anchor text
       const candidates: number[] = [];
       for (let sIdx = 0; sIdx < sections.length; sIdx++) {
-        if ((sectionLinksCount.get(sIdx) ?? 0) >= maxLinksPerSection) continue;
+        if ((sectionLinksCount.get(sIdx) ?? 0) >= capPerSection) continue;
 
-        // Split section around existing links to avoid injecting inside them
         const sectionParts = sections[sIdx].split(/(<a\b[^>]*>[\s\S]*?<\/a>)/gi);
         const hasMatch = sectionParts.some(part => {
           if (!part) return false;
@@ -431,26 +420,28 @@ export class SOTAInternalLinkEngine {
 
       if (candidates.length === 0) continue;
 
-      // Pick the section in the zone with fewest links
-      candidates.sort((a, b) => getSectionPriority(a) - getSectionPriority(b));
+      // Pick the section with the FEWEST existing links (ensures even spread)
+      candidates.sort((a, b) => (sectionLinksCount.get(a) ?? 0) - (sectionLinksCount.get(b) ?? 0));
       const bestSectionIdx = candidates[0];
 
-      // Inject into the first match within that section
-      const sectionParts = sections[bestSectionIdx].split(/(<a\b[^>]*>[\s\S]*?<\/a>)/gi);
+      // Inject into the first match within that section (inside <p> tags only, never headings)
+      const sectionParts = sections[bestSectionIdx].split(/(<a\b[^>]*>[\s\S]*?<\/a>|<h[1-6]\b[^>]*>[\s\S]*?<\/h[1-6]>)/gi);
       let didInject = false;
 
       for (let i = 0; i < sectionParts.length; i++) {
         const part = sectionParts[i];
         if (!part) continue;
+        // Skip existing links and headings
         if (/^<a\b/i.test(part)) continue;
+        if (/^<h[1-6]\b/i.test(part)) continue;
 
         const match = part.match(regex);
         if (!match) continue;
 
         const actualText = match[0];
         const safeUrl = this.escapeHtmlAttr(link.targetUrl);
-        const safeTitle = this.escapeHtmlAttr(anchor);
-        const linkHtml = `<a href="${safeUrl}" title="${safeTitle}">${actualText}</a>`;
+        const safeAnchor = this.escapeHtmlAttr(anchor);
+        const linkHtml = `<a href="${safeUrl}" title="${safeAnchor}">${actualText}</a>`;
         sectionParts[i] = part.replace(regex, linkHtml);
         didInject = true;
         break;
@@ -460,14 +451,22 @@ export class SOTAInternalLinkEngine {
         sections[bestSectionIdx] = sectionParts.join('');
         injectedAnchors.add(anchor.toLowerCase());
         injectedCount++;
-        const zone = getZone(bestSectionIdx);
-        zoneLinksCount.set(zone, (zoneLinksCount.get(zone) ?? 0) + 1);
         sectionLinksCount.set(bestSectionIdx, (sectionLinksCount.get(bestSectionIdx) ?? 0) + 1);
-        console.log(`[InternalLinkEngine] ✅ Linked: "${anchor}" → ${link.targetUrl} [zone: ${zone}]`);
+        const sectionRatio = totalSections > 1 ? bestSectionIdx / (totalSections - 1) : 0.5;
+        const zone = sectionRatio < 0.33 ? 'beginning' : sectionRatio < 0.67 ? 'middle' : 'end';
+        console.log(`[InternalLinkEngine] ✅ Linked: "${anchor}" → ${link.targetUrl} [section ${bestSectionIdx + 1}/${totalSections}, zone: ${zone}]`);
       }
     }
 
-    console.log(`[InternalLinkEngine] Successfully injected ${injectedCount}/${links.length} links (zones: beginning=${zoneLinksCount.get('beginning')}, middle=${zoneLinksCount.get('middle')}, end=${zoneLinksCount.get('end')})`);
+    // Log distribution summary
+    const zoneStats = { beginning: 0, middle: 0, end: 0 };
+    for (const [idx, count] of sectionLinksCount) {
+      const ratio = totalSections > 1 ? idx / (totalSections - 1) : 0.5;
+      if (ratio < 0.33) zoneStats.beginning += count;
+      else if (ratio < 0.67) zoneStats.middle += count;
+      else zoneStats.end += count;
+    }
+    console.log(`[InternalLinkEngine] Injected ${injectedCount}/${links.length} links (beginning=${zoneStats.beginning}, middle=${zoneStats.middle}, end=${zoneStats.end})`);
     return sections.join('');
   }
 

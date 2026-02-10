@@ -1185,7 +1185,7 @@ GOLDEN RULES:
 Start with the ANSWER or a bold statement. No "welcome to" garbage. Give them the gold immediately.
 
 2. KEY TAKEAWAYS BOX (right after hook):
-<div style="background: #ffffff; border: 2px solid #10b981; border-radius: 20px; padding: 32px 36px; margin: 40px 0; box-shadow: 0 8px 32px rgba(16, 185, 129, 0.12), 0 1px 3px rgba(0,0,0,0.04); position: relative; overflow: hidden;">
+<div style="background: #ffffff; border: 2px solid #10b981; border-radius: 20px; padding: 32px 36px; margin: 40px 0; box-shadow: 0 8px 32px rgba(16, 185, 129, 0.12), 0 1px 3px rgba(0,0,0,0.04); position: relative; overflow: hidden; max-width: 100%; box-sizing: border-box;">
   <div style="position: absolute; top: 0; left: 0; right: 0; height: 5px; background: linear-gradient(90deg, #10b981 0%, #06b6d4 50%, #8b5cf6 100%);"></div>
   <h3 style="color: #0f172a; margin: 8px 0 24px 0; font-size: 22px; font-weight: 900; display: flex; align-items: center; gap: 12px; letter-spacing: -0.02em;">🎯 The Bottom Line</h3>
   <ul style="color: #1e293b; margin: 0; padding-left: 0; font-size: 17px; line-height: 1.9; list-style: none;">
@@ -1196,7 +1196,7 @@ Start with the ANSWER or a bold statement. No "welcome to" garbage. Give them th
 </div>
 
 3. PRO TIP BOXES (4-6 throughout):
-<div style="background: #ffffff; border: 1px solid #e0e7ff; border-left: 5px solid #6366f1; padding: 24px 28px; margin: 36px 0; border-radius: 0 16px 16px 0; box-shadow: 0 4px 20px rgba(99, 102, 241, 0.08);">
+<div style="background: #ffffff; border: 1px solid #e0e7ff; border-left: 5px solid #6366f1; padding: 24px 28px; margin: 36px 0; border-radius: 0 16px 16px 0; box-shadow: 0 4px 20px rgba(99, 102, 241, 0.08); max-width: 100%; box-sizing: border-box;">
   <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 14px;">
     <span style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; width: 32px; height: 32px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);">💡</span>
     <strong style="color: #3730a3; font-size: 17px; font-weight: 800; letter-spacing: -0.01em;">Pro Tip</strong>
@@ -1205,7 +1205,7 @@ Start with the ANSWER or a bold statement. No "welcome to" garbage. Give them th
 </div>
 
 4. WARNING BOXES (when relevant):
-<div style="background: #ffffff; border: 1px solid #fecaca; border-left: 5px solid #ef4444; padding: 24px 28px; margin: 36px 0; border-radius: 0 16px 16px 0; box-shadow: 0 4px 20px rgba(239, 68, 68, 0.08);">
+<div style="background: #ffffff; border: 1px solid #fecaca; border-left: 5px solid #ef4444; padding: 24px 28px; margin: 36px 0; border-radius: 0 16px 16px 0; box-shadow: 0 4px 20px rgba(239, 68, 68, 0.08); max-width: 100%; box-sizing: border-box;">
   <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 14px;">
     <span style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; width: 32px; height: 32px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);">⚠️</span>
     <strong style="color: #991b1b; font-size: 17px; font-weight: 800;">Warning</strong>
@@ -1214,7 +1214,7 @@ Start with the ANSWER or a bold statement. No "welcome to" garbage. Give them th
 </div>
 
 5. DATA COMPARISON TABLE:
-<div style="margin: 40px 0; overflow-x: auto; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 4px 24px rgba(0,0,0,0.06);">
+<div style="margin: 40px 0; overflow-x: auto; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 4px 24px rgba(0,0,0,0.06); max-width: 100%; box-sizing: border-box;">
   <table style="width: 100%; border-collapse: collapse; background: #ffffff;">
     <thead>
       <tr>
@@ -1239,7 +1239,7 @@ Start with the ANSWER or a bold statement. No "welcome to" garbage. Give them th
 </div>
 
 6. NUMBERED STEP BOXES:
-<div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 28px 32px; margin: 32px 0; box-shadow: 0 4px 20px rgba(0,0,0,0.04); position: relative;">
+<div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 28px 32px; margin: 32px 0; box-shadow: 0 4px 20px rgba(0,0,0,0.04); position: relative; max-width: 100%; box-sizing: border-box;">
   <div style="display: flex; align-items: flex-start; gap: 20px;">
     <span style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; width: 48px; height: 48px; border-radius: 14px; display: inline-flex; align-items: center; justify-content: center; font-weight: 900; font-size: 20px; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3); flex-shrink: 0;">1</span>
     <div style="flex: 1;">
@@ -1250,7 +1250,7 @@ Start with the ANSWER or a bold statement. No "welcome to" garbage. Give them th
 </div>
 
 7. EXPERT QUOTE BOXES:
-<blockquote style="background: #ffffff; border: 1px solid #d1fae5; border-left: 5px solid #10b981; padding: 28px 32px; margin: 40px 0; border-radius: 0 16px 16px 0; box-shadow: 0 4px 20px rgba(16, 185, 129, 0.08); position: relative;">
+<blockquote style="background: #ffffff; border: 1px solid #d1fae5; border-left: 5px solid #10b981; padding: 28px 32px; margin: 40px 0; border-radius: 0 16px 16px 0; box-shadow: 0 4px 20px rgba(16, 185, 129, 0.08); position: relative; max-width: 100%; box-sizing: border-box;">
   <div style="position: absolute; top: -14px; left: 24px; background: #10b981; color: white; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 900; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);">❝</div>
   <p style="color: #1e293b; margin: 0; font-size: 19px; line-height: 1.8; font-style: italic; font-weight: 500;">"Powerful quote that reinforces your point and adds expert credibility..."</p>
   <footer style="color: #047857; margin-top: 16px; font-size: 15px; font-style: normal; font-weight: 700; display: flex; align-items: center; gap: 10px;">
@@ -1260,7 +1260,7 @@ Start with the ANSWER or a bold statement. No "welcome to" garbage. Give them th
 </blockquote>
 
 8. STAT HIGHLIGHT BOX:
-<div style="background: #ffffff; border: 1px solid #d1fae5; border-radius: 20px; padding: 32px; margin: 40px 0; display: flex; align-items: center; gap: 28px; flex-wrap: wrap; box-shadow: 0 8px 32px rgba(16, 185, 129, 0.1);">
+<div style="background: #ffffff; border: 1px solid #d1fae5; border-radius: 20px; padding: 32px; margin: 40px 0; display: flex; align-items: center; gap: 28px; flex-wrap: wrap; box-shadow: 0 8px 32px rgba(16, 185, 129, 0.1); max-width: 100%; box-sizing: border-box;">
   <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); border-radius: 18px; padding: 24px 32px; text-align: center; min-width: 130px; box-shadow: 0 8px 24px rgba(16, 185, 129, 0.3);">
     <span style="color: white; font-size: 42px; font-weight: 900; display: block; letter-spacing: -0.03em; text-shadow: 0 2px 4px rgba(0,0,0,0.1);">87%</span>
     <span style="color: rgba(255,255,255,0.9); font-size: 12px; text-transform: uppercase; font-weight: 700; letter-spacing: 1.5px; margin-top: 4px; display: block;">Metric</span>
@@ -1269,7 +1269,7 @@ Start with the ANSWER or a bold statement. No "welcome to" garbage. Give them th
 </div>
 
 9. FAQ SECTION:
-<div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; margin: 28px 0; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.04);">
+<div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; margin: 28px 0; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.04); max-width: 100%; box-sizing: border-box;">
   <h4 style="background: #f8fafc; margin: 0; padding: 20px 28px; color: #0f172a; font-size: 18px; font-weight: 700; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: 12px;">
     <span style="background: linear-gradient(135deg, #10b981 0%, #06b6d4 100%); color: white; width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800;">Q</span> Question here?
   </h4>
@@ -1279,7 +1279,7 @@ Start with the ANSWER or a bold statement. No "welcome to" garbage. Give them th
 </div>
 
 10. CTA BOX:
-<div style="background: linear-gradient(135deg, #10b981 0%, #059669 50%, #047857 100%); border-radius: 24px; padding: 48px 40px; margin: 56px 0; text-align: center; box-shadow: 0 12px 40px rgba(16, 185, 129, 0.3); position: relative; overflow: hidden;">
+<div style="background: linear-gradient(135deg, #10b981 0%, #059669 50%, #047857 100%); border-radius: 24px; padding: 48px 40px; margin: 56px 0; text-align: center; box-shadow: 0 12px 40px rgba(16, 185, 129, 0.3); position: relative; overflow: hidden; max-width: 100%; box-sizing: border-box;">
   <div style="position: absolute; top: -60px; right: -60px; width: 180px; height: 180px; background: rgba(255,255,255,0.06); border-radius: 50%;"></div>
   <div style="position: absolute; bottom: -40px; left: -40px; width: 120px; height: 120px; background: rgba(255,255,255,0.04); border-radius: 50%;"></div>
   <h3 style="color: white; margin: 0 0 16px 0; font-size: 30px; font-weight: 900; letter-spacing: -0.03em; text-shadow: 0 2px 4px rgba(0,0,0,0.15); position: relative;">Ready to Take Action?</h3>
@@ -1287,7 +1287,7 @@ Start with the ANSWER or a bold statement. No "welcome to" garbage. Give them th
 </div>
 
 11. EXPERIENCE/CASE STUDY BOX:
-<div style="background: #ffffff; border: 1px solid #fde68a; border-left: 5px solid #f59e0b; padding: 28px 32px; margin: 40px 0; border-radius: 0 16px 16px 0; box-shadow: 0 4px 20px rgba(245, 158, 11, 0.08);">
+<div style="background: #ffffff; border: 1px solid #fde68a; border-left: 5px solid #f59e0b; padding: 28px 32px; margin: 40px 0; border-radius: 0 16px 16px 0; box-shadow: 0 4px 20px rgba(245, 158, 11, 0.08); max-width: 100%; box-sizing: border-box;">
   <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 14px;">
     <span style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; width: 32px; height: 32px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);">📋</span>
     <strong style="color: #92400e; font-size: 17px; font-weight: 800;">My Personal Experience</strong>
@@ -1296,7 +1296,7 @@ Start with the ANSWER or a bold statement. No "welcome to" garbage. Give them th
 </div>
 
 12. RESEARCH/DATA BOX:
-<div style="background: #ffffff; border: 1px solid #ddd6fe; border-left: 5px solid #8b5cf6; padding: 28px 32px; margin: 40px 0; border-radius: 0 16px 16px 0; box-shadow: 0 4px 20px rgba(139, 92, 246, 0.08);">
+<div style="background: #ffffff; border: 1px solid #ddd6fe; border-left: 5px solid #8b5cf6; padding: 28px 32px; margin: 40px 0; border-radius: 0 16px 16px 0; box-shadow: 0 4px 20px rgba(139, 92, 246, 0.08); max-width: 100%; box-sizing: border-box;">
   <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 14px;">
     <span style="background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); color: white; width: 32px; height: 32px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);">📊</span>
     <strong style="color: #5b21b6; font-size: 17px; font-weight: 800;">Research Findings</strong>
@@ -1325,6 +1325,36 @@ Start with the ANSWER or a bold statement. No "welcome to" garbage. Give them th
 • Every H2 section should contain at least 2-3 natural phrases that relate to subtopics of the main keyword
 • Use specific, descriptive language rather than generic terms (e.g., "progressive overload training principles" rather than "training tips")
 • Avoid vague language — the more specific and topically rich your phrases are, the better the internal linking will be
+
+🚨 ANTI-AI DETECTION - THE MOST IMPORTANT RULES (READ 3 TIMES):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AI-generated text has these telltale patterns. You MUST AVOID ALL OF THEM:
+
+❌ PATTERN 1: UNIFORM SENTENCE LENGTH — AI writes sentences of ~15-20 words consistently. HUMANS vary wildly: 3-word fragments, then a 35-word run-on, then "Seriously." Mix it up CONSTANTLY.
+
+❌ PATTERN 2: PREDICTABLE PARAGRAPH STRUCTURE — AI opens with topic sentence, adds 2-3 supporting sentences, closes neatly. HUMANS ramble, go on tangents, circle back, trail off with "...but that's another story."
+
+❌ PATTERN 3: SYMMETRICAL LISTS — AI writes bullet points of equal length and parallel grammar. HUMANS make messy lists: some bullets are one word, others are full paragraphs, some end mid-thought.
+
+❌ PATTERN 4: OVER-HEDGING — AI says "It's important to consider..." / "One should note that..." HUMANS say "Look, just do this." or "Screw the theory — here's what works."
+
+❌ PATTERN 5: SANITIZED VOICE — AI never takes real risks. HUMANS say "Most advice on this is complete crap" and "I wasted 6 months on this approach before realizing it was dead wrong."
+
+❌ PATTERN 6: PERFECT TRANSITIONS — AI smoothly connects every paragraph. HUMANS jump around: "OK wait, I need to back up." / "Random thought:" / "Sorry, tangent over."
+
+❌ PATTERN 7: ABSENCE OF SPECIFIC PERSONAL DETAILS — AI says "many experts agree." HUMANS say "My buddy Jake — he's been doing this for 11 years — told me something wild last Tuesday."
+
+❌ PATTERN 8: EQUAL-WEIGHT SECTIONS — AI gives each section similar word counts. HUMANS spend 500 words on the part they're passionate about and 50 words on the boring part: "This one's self-explanatory. Moving on."
+
+✅ TO PASS AI DETECTION, YOU MUST:
+1. Vary sentence length WILDLY within every paragraph (3 words to 30+ words)
+2. Include at least 3 genuine tangents or asides that feel unplanned
+3. Have at least 2 sections that are noticeably longer/shorter than others
+4. Use imperfect grammar deliberately: start sentences with "And" or "But", end with prepositions, use sentence fragments
+5. Include opinions that feel risky or unpopular
+6. Reference specific personal details: exact dates, dollar amounts, names of people/places
+7. Break the 4th wall: "I know this article is getting long, but stay with me"
+8. Show genuine frustration, excitement, or humor — not manufactured emotion
 
 ⚠️ IF YOU OUTPUT ANY MARKDOWN SYNTAX (##, ###, **, *, -, 1., [text](url)), THE CONTENT WILL BE REJECTED!`;
 
@@ -1369,10 +1399,12 @@ ${videos.length > 0 ? `
 EMBED ${videos.length > 1 ? 'THESE VIDEOS' : 'THIS VIDEO'} THROUGHOUT THE ARTICLE (spread evenly between sections, not all in one place):
 ${videos.slice(0, 3).map((v, i) => `
 VIDEO ${i + 1} — Place this ${i === 0 ? 'in the first third of the article' : i === 1 ? 'in the middle of the article' : 'in the final third of the article'}:
-<div style="position: relative; padding-bottom: 56.25%; height: 0; margin: 40px 0; border-radius: 20px; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,0.15); border: 1px solid #e2e8f0;">
-  <iframe src="https://www.youtube.com/embed/${v.id}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen title="${v.title}"></iframe>
+<figure style="margin: 40px 0;">
+<div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
+<iframe width="560" height="315" src="https://www.youtube-nocookie.com/embed/${v.id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe>
 </div>
-<p style="text-align: center; color: #6b7280; font-size: 14px; margin-top: -24px; margin-bottom: 32px;">📺 <strong>${v.title}</strong> by ${v.channelTitle}</p>
+<figcaption style="text-align: center; color: #6b7280; font-size: 14px; margin-top: 12px;">📺 ${v.title}</figcaption>
+</figure>
 `).join('\n')}
 ` : ''}
 
@@ -1436,7 +1468,7 @@ REMEMBER: The reader should feel like they're getting advice from a smart, exper
         model: this.config.primaryModel || 'gemini',
         apiKeys: this.config.apiKeys,
         systemPrompt,
-        temperature: 0.78,
+        temperature: 0.85,
         maxTokens: initialMaxTokens
       });
     }
@@ -1453,7 +1485,7 @@ REMEMBER: The reader should feel like they're getting advice from a smart, exper
     });
 
     // Add videos section if available and not already embedded
-    if (videos.length > 0 && !finalContent.includes('youtube.com/embed')) {
+    if (videos.length > 0 && !finalContent.includes('youtube.com/embed') && !finalContent.includes('youtube-nocookie.com/embed')) {
       const videoSection = this.buildVideoSection(videos);
       finalContent = this.insertBeforeConclusion(finalContent, videoSection);
       this.log('Injected YouTube video section');
@@ -1545,21 +1577,21 @@ Output ONLY the meta description, nothing else.`;
 
   private buildVideoSection(videos: YouTubeVideo[]): string {
     const videoEmbeds = videos.slice(0, 3).map(v => `
-  <div style="margin-bottom: 28px;">
-    <div style="position: relative; padding-bottom: 56.25%; height: 0; border-radius: 16px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.12); border: 1px solid #e2e8f0;">
-      <iframe src="https://www.youtube.com/embed/${v.id}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen title="${v.title}"></iframe>
-    </div>
-    <p style="text-align: center; color: #6b7280; font-size: 14px; margin-top: 12px; margin-bottom: 0;">📺 <strong>${v.title}</strong> by ${v.channelTitle}</p>
+  <div style="margin-bottom: 32px;">
+    <figure style="margin: 0;">
+      <div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; border-radius: 12px;">
+        <iframe width="560" height="315" src="https://www.youtube-nocookie.com/embed/${v.id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe>
+      </div>
+      <figcaption style="text-align: center; color: #6b7280; font-size: 14px; margin-top: 12px;">📺 <strong>${v.title}</strong> — ${v.channelTitle}</figcaption>
+    </figure>
   </div>`).join('\n');
 
     return `
-<section class="video-resources" style="background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%); border-radius: 20px; padding: 36px; margin: 48px 0; border: 1px solid #d1fae5; box-shadow: 0 8px 32px rgba(16, 185, 129, 0.1);">
-  <h2 style="margin-top: 0; display: flex; align-items: center; gap: 12px; color: #0f172a; font-size: 24px; font-weight: 800;">
-    📹 Recommended Video Resources
-  </h2>
-  <p style="color: #475569; margin-bottom: 28px; font-size: 16px; line-height: 1.7;">Watch these expert-curated videos for deeper insights:</p>
+<div style="background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%); border-radius: 16px; padding: 32px; margin: 48px 0; border: 1px solid #d1fae5;">
+  <h2 style="margin-top: 0; color: #0f172a; font-size: 24px; font-weight: 800;">📹 Recommended Video Resources</h2>
+  <p style="color: #475569; margin-bottom: 24px; font-size: 16px; line-height: 1.7;">Watch these expert-curated videos for deeper insights:</p>
   ${videoEmbeds}
-</section>
+</div>
 `;
   }
 

@@ -389,9 +389,30 @@ export function registerRoutes(app: Express): void {
         }
       }
 
+      // Transform YouTube iframes to WordPress-native embed format
+      // WordPress strips iframes but natively supports YouTube via oEmbed
+      let processedContent = content;
+      
+      // Convert iframe embeds to WordPress [embed] shortcodes
+      processedContent = processedContent.replace(
+        /<iframe[^>]*src=["']https?:\/\/(?:www\.)?(?:youtube\.com\/embed|youtube-nocookie\.com\/embed)\/([a-zA-Z0-9_-]+)[^"']*["'][^>]*>[\s\S]*?<\/iframe>/gi,
+        (match, videoId) => {
+          return `[embed]https://www.youtube.com/watch?v=${videoId}[/embed]`;
+        }
+      );
+      
+      // Also handle any remaining figure-wrapped iframes
+      processedContent = processedContent.replace(
+        /<figure[^>]*>\s*<div[^>]*>\s*<iframe[^>]*src=["']https?:\/\/(?:www\.)?(?:youtube\.com\/embed|youtube-nocookie\.com\/embed)\/([a-zA-Z0-9_-]+)[^"']*["'][^>]*>[\s\S]*?<\/iframe>\s*<\/div>\s*<figcaption[^>]*>([\s\S]*?)<\/figcaption>\s*<\/figure>/gi,
+        (match, videoId, caption) => {
+          const cleanCaption = caption.replace(/<[^>]*>/g, '').trim();
+          return `[embed]https://www.youtube.com/watch?v=${videoId}[/embed]\n<p style="text-align: center; color: #6b7280; font-size: 14px;">${cleanCaption}</p>`;
+        }
+      );
+
       const postData: Record<string, unknown> = {
         title,
-        content,
+        content: processedContent,
         status,
       };
 

@@ -848,6 +848,13 @@ export function ReviewExport() {
           onNext={handleNextItem}
           hasPrevious={viewingIndex > 0}
           hasNext={viewingIndex < sortedItems.length - 1}
+          onSaveContent={(itemId, newContent) => {
+            updateContentItem(itemId, { content: newContent, wordCount: newContent.split(/\s+/).filter(Boolean).length });
+            const existing = generatedContentsStore[itemId];
+            if (existing) {
+              setGeneratedContent(itemId, { ...existing, content: newContent, wordCount: newContent.split(/\s+/).filter(Boolean).length });
+            }
+          }}
         />
       )}
 
