@@ -19,6 +19,20 @@ function isPublicUrl(input: string): boolean {
   const hostname = parsed.hostname.toLowerCase();
   if (hostname === 'localhost' || hostname === '[::1]') return false;
   if (hostname.endsWith('.local') || hostname.endsWith('.internal')) return false;
+
+  // Block IPv6 private/link-local/loopback ranges
+  if (hostname.startsWith('[')) {
+    const ipv6 = hostname.slice(1, -1).toLowerCase();
+    if (
+      ipv6 === '::1' || ipv6 === '::' ||
+      ipv6.startsWith('fc') || ipv6.startsWith('fd') ||       // Unique local (fc00::/7)
+      ipv6.startsWith('fe8') || ipv6.startsWith('fe9') ||     // Link-local (fe80::/10)
+      ipv6.startsWith('fea') || ipv6.startsWith('feb')
+    ) {
+      return false;
+    }
+  }
+
   const parts = hostname.split('.').map(Number);
   if (parts.length === 4 && parts.every(n => !isNaN(n))) {
     if (parts[0] === 127) return false;
@@ -30,6 +44,7 @@ function isPublicUrl(input: string): boolean {
   }
   return true;
 }
+
 
 export function registerRoutes(app: Express): void {
   if (db) {
