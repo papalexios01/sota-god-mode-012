@@ -183,40 +183,18 @@ interface OptimizerStore {
   setGodModeState: (updates: Partial<GodModeState>) => void;
   addGodModeActivity: (item: Omit<GodModeActivityItem, 'id' | 'timestamp'>) => void;
   addGodModeHistory: (item: GodModeHistoryItem) => void;
-      updateGodModeStats: (updates) => set((state) => {
-        const stats = state.godModeState.stats;
-        const newTotal = stats.totalProcessed + (updates.totalProcessed || 0);
-        const newSuccess = stats.successCount + (updates.successCount || 0);
-        const newError = stats.errorCount + (updates.errorCount || 0);
-        const newWords = stats.totalWordsGenerated + (updates.wordCount || 0);
-
-        // Calculate new average quality score
-        let newAvgQuality = stats.avgQualityScore;
-        if (updates.qualityScore && updates.qualityScore > 0) {
-          const totalQuality = stats.avgQualityScore * stats.totalProcessed + updates.qualityScore;
-          newAvgQuality = newTotal > 0 ? totalQuality / newTotal : updates.qualityScore;
-        }
-
-        return {
-          godModeState: {
-            ...state.godModeState,
-            stats: {
-              ...stats,
-              totalProcessed: newTotal,
-              successCount: newSuccess,
-              errorCount: newError,
-              avgQualityScore: newAvgQuality,
-              totalWordsGenerated: newWords,
-              // FIX: Apply metadata fields as absolute values (not deltas) when provided
-              ...(updates.cycleCount !== undefined && { cycleCount: updates.cycleCount }),
-              ...(updates.sessionStartedAt !== undefined && { sessionStartedAt: updates.sessionStartedAt }),
-              ...(updates.lastScanAt !== undefined && { lastScanAt: updates.lastScanAt }),
-              ...(updates.nextScanAt !== undefined && { nextScanAt: updates.nextScanAt }),
-            }
-          }
-        };
-      }),
-
+  // ← CHANGED: Extended type signature to include metadata pass-through fields
+  updateGodModeStats: (updates: {
+    totalProcessed?: number;
+    successCount?: number;
+    errorCount?: number;
+    qualityScore?: number;
+    wordCount?: number;
+    cycleCount?: number;
+    sessionStartedAt?: Date | null;
+    lastScanAt?: Date | null;
+    nextScanAt?: Date | null;
+  }) => void;
   
   // Persisted Generated Content (survives navigation)
   generatedContentsStore: GeneratedContentStore;
@@ -358,6 +336,7 @@ export const useOptimizerStore = create<OptimizerStore>()(
           history: [item, ...state.godModeState.history.slice(0, 99)], // Keep last 100
         }
       })),
+      // ← CHANGED: Now accepts and applies metadata fields (cycleCount, sessionStartedAt, etc.)
       updateGodModeStats: (updates) => set((state) => {
         const stats = state.godModeState.stats;
         const newTotal = stats.totalProcessed + (updates.totalProcessed || 0);
@@ -382,6 +361,11 @@ export const useOptimizerStore = create<OptimizerStore>()(
               errorCount: newError,
               avgQualityScore: newAvgQuality,
               totalWordsGenerated: newWords,
+              // ← NEW: Apply metadata fields as absolute values (not deltas) when provided
+              ...(updates.cycleCount !== undefined && { cycleCount: updates.cycleCount }),
+              ...(updates.sessionStartedAt !== undefined && { sessionStartedAt: updates.sessionStartedAt }),
+              ...(updates.lastScanAt !== undefined && { lastScanAt: updates.lastScanAt }),
+              ...(updates.nextScanAt !== undefined && { nextScanAt: updates.nextScanAt }),
             }
           }
         };
