@@ -800,7 +800,7 @@ export class GodModeEngine {
     this.persistQueue(); // ← NEW: persist after every sort
   }
 
-    // ← NEW: Queue persistence to survive page refreshes
+  // ← NEW: Queue persistence to survive page refreshes
   private persistQueue(): void {
     try {
       const serializable = this.queue.map(item => ({
@@ -813,6 +813,7 @@ export class GodModeEngine {
     }
   }
 
+  // ← NEW: Restore queue from localStorage after page refresh
   private restoreQueue(): void {
     try {
       const stored = localStorage.getItem('god_mode_queue');
@@ -830,8 +831,6 @@ export class GodModeEngine {
       console.warn('[GodMode] Failed to restore queue:', e);
     }
   }
-
-
 
   // ← CHANGED: Robustness for non-semantic slugs (e.g., /p/12345, /a1b2c3)
   private extractKeyword(url: string): string {
@@ -855,7 +854,6 @@ export class GodModeEngine {
       return url;
     }
   }
-
 
   private getSlug(url: string): string {
     try {
