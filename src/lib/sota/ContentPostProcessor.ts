@@ -1,210 +1,270 @@
 // src/lib/sota/ContentPostProcessor.ts
-// SOTA Content Post-Processor v3.0 - Enterprise-Grade HTML Enhancement
+// SOTA Content Post-Processor v4.0 — Visual Break Enforcement & HTML Polish
+// Exports: ContentPostProcessor (class with static methods)
 
-import type { NeuronWriterAnalysis } from './NeuronWriterService';
-import { scoreContentAgainstNeuron } from './NeuronWriterService';
+import type { PostProcessingResult } from './types';
 
-/**
- * Enhances HTML content with enterprise-grade visual elements.
- */
-export function enhanceHtmlDesign(html: string): string {
-  let enhanced = html;
+// ═══════════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  // Enhance blockquotes that don't have inline styles
-  enhanced = enhanced.replace(
-    /<blockquote>(?!\s*<blockquote)([\s\S]*?)<\/blockquote>/gi,
-    `<blockquote style="border-left: 4px solid #8b5cf6; background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%); padding: 20px 24px; margin: 24px 0; border-radius: 0 12px 12px 0; font-style: italic; color: #4c1d95; line-height: 1.8;">$1</blockquote>`
-  );
-
-  // Enhance tables that don't have inline styles
-  enhanced = enhanced.replace(
-    /<table(?!\s+style)>/gi,
-    `<table style="width: 100%; border-collapse: collapse; margin: 24px 0; font-size: 15px;">`
-  );
-
-  enhanced = enhanced.replace(
-    /<th(?!\s+style)>/gi,
-    `<th style="padding: 14px 18px; text-align: left; background: linear-gradient(135deg, #1e293b 0%, #334155 100%); color: #f8fafc; font-weight: 600; border: 1px solid #374151;">`
-  );
-
-  enhanced = enhanced.replace(
-    /<td(?!\s+style)>/gi,
-    `<td style="padding: 12px 18px; border: 1px solid #e5e7eb;">`
-  );
-
-  // Add proper spacing to H2/H3 if missing
-  enhanced = enhanced.replace(
-    /<h2(?!\s+style)/gi,
-    `<h2 style="margin-top: 48px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid #f1f5f9;"`
-  );
-
-  enhanced = enhanced.replace(
-    /<h3(?!\s+style)/gi,
-    `<h3 style="margin-top: 32px; margin-bottom: 12px;"`
-  );
-
-  // Ensure images are responsive
-  enhanced = enhanced.replace(
-    /<img(?!\s[^>]*style)/gi,
-    `<img style="max-width: 100%; height: auto; border-radius: 12px; margin: 24px 0;"`
-  );
-
-  // Add horizontal rules between major sections (before H2 tags, but not the first one)
-  let h2Count = 0;
-  enhanced = enhanced.replace(/<h2/gi, (match) => {
-    h2Count++;
-    if (h2Count > 1) {
-      return `<hr style="border: none; border-top: 2px solid #f1f5f9; margin: 48px 0;" />\n${match}`;
-    }
-    return match;
-  });
-
-  return enhanced;
+interface ProcessOptions {
+  maxConsecutiveWords?: number;
+  usePullQuotes?: boolean;
 }
 
-/**
- * Injects missing NeuronWriter terms into appropriate locations within the content.
- * This is the "editor pass" that ensures 90%+ score.
- */
-export function injectMissingTerms(
-  html: string,
-  analysis: NeuronWriterAnalysis,
-  maxIterations: number = 2
-): string {
-  let content = html;
+interface Violation {
+  startIndex: number;
+  endIndex: number;
+  wordCount: number;
+  textSnippet: string;
+}
 
-  for (let iteration = 0; iteration < maxIterations; iteration++) {
-    const scoreResult = scoreContentAgainstNeuron(content, analysis);
-    
-    if (scoreResult.score >= 90) break; // Already at target
+// ═══════════════════════════════════════════════════════════════════════════════
+// VISUAL BREAK ELEMENTS (injected to break up walls of text)
+// ═══════════════════════════════════════════════════════════════════════════════
 
-    const missingTerms = scoreResult.missing;
-    const underusedTerms = scoreResult.underused;
+const BREAK_ELEMENTS = [
+  // Pro Tip Box
+  `<div style="background: #ffffff; border: 1px solid #e0e7ff; border-left: 5px solid #6366f1; padding: 24px 28px; margin: 36px 0; border-radius: 0 16px 16px 0; box-shadow: 0 4px 20px rgba(99, 102, 241, 0.08); max-width: 100%; box-sizing: border-box;">
+  <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 14px;">
+    <span style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; width: 32px; height: 32px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px;">💡</span>
+    <strong style="color: #3730a3; font-size: 17px; font-weight: 800;">Pro Tip</strong>
+  </div>
+  <p style="color: #334155; font-size: 17px; margin: 0; line-height: 1.8;">Keep this principle in mind as you implement these strategies — consistency beats perfection every time.</p>
+</div>`,
 
-    if (missingTerms.length === 0 && underusedTerms.length === 0) break;
+  // Key Insight Box
+  `<div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #16a34a; padding: 20px 24px; border-radius: 0 12px 12px 0; margin: 36px 0; max-width: 100%; box-sizing: border-box;">
+  <p style="font-weight: 700; color: #15803d; margin: 0 0 8px; font-size: 16px;">🔑 Key Insight</p>
+  <p style="color: #166534; margin: 0; line-height: 1.7; font-size: 16px;">Understanding this concept is what separates beginners from experts in this field.</p>
+</div>`,
 
-    // Strategy 1: Add missing high-weight terms into existing paragraphs
-    const paragraphs = content.match(/<p[^>]*>[\s\S]*?<\/p>/gi) || [];
-    
-    for (const term of missingTerms.slice(0, 15)) {
-      // Find the term data
-      const termData = [...analysis.basicKeywords, ...analysis.extendedKeywords, ...analysis.entities]
-        .find(t => t.term === term);
-      if (!termData) continue;
+  // Important Note Box
+  `<div style="background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border-left: 4px solid #d97706; padding: 20px 24px; border-radius: 0 12px 12px 0; margin: 36px 0; max-width: 100%; box-sizing: border-box;">
+  <p style="font-weight: 700; color: #92400e; margin: 0 0 8px; font-size: 16px;">📌 Important Note</p>
+  <p style="color: #78350f; margin: 0; line-height: 1.7; font-size: 16px;">Don't skip this step — it's one of the most common mistakes that leads to subpar results.</p>
+</div>`,
 
-      // Find a paragraph that's topically related
-      let inserted = false;
-      for (let i = 0; i < paragraphs.length && !inserted; i++) {
-        const p = paragraphs[i];
-        const pText = p.replace(/<[^>]*>/g, '').toLowerCase();
-        
-        // Check if paragraph is about a related topic
-        const termWords = term.toLowerCase().split(/\s+/);
-        const hasRelatedContent = termWords.some(tw => 
-          tw.length > 3 && pText.includes(tw)
-        );
+  // Quick Summary Box
+  `<div style="background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-left: 4px solid #2563eb; padding: 20px 24px; border-radius: 0 12px 12px 0; margin: 36px 0; max-width: 100%; box-sizing: border-box;">
+  <p style="font-weight: 700; color: #1e40af; margin: 0 0 8px; font-size: 16px;">📋 Quick Summary</p>
+  <p style="color: #1e3a5f; margin: 0; line-height: 1.7; font-size: 16px;">The bottom line? Focus on the fundamentals first, then optimize for advanced techniques once you've built a solid foundation.</p>
+</div>`,
+];
 
-        if (hasRelatedContent || (i > 2 && i < paragraphs.length - 2)) {
-          // Add the term naturally in context
-          const enrichedP = p.replace(
-            /<\/p>/i,
-            ` This is particularly relevant when considering <strong>${term}</strong> in the broader context.</p>`
-          );
-          content = content.replace(p, enrichedP);
-          inserted = true;
+const PULL_QUOTES = [
+  `<blockquote style="border-left: 4px solid #8b5cf6; background: linear-gradient(135deg, #faf5ff 0%, #f5f3ff 100%); margin: 36px 0; padding: 24px 28px; border-radius: 0 16px 16px 0; max-width: 100%; box-sizing: border-box;">
+  <p style="font-size: 18px; font-style: italic; color: #4c1d95; line-height: 1.8; margin: 0;">"The difference between good and great often comes down to the details most people overlook."</p>
+</blockquote>`,
+
+  `<blockquote style="border-left: 4px solid #10b981; background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%); margin: 36px 0; padding: 24px 28px; border-radius: 0 16px 16px 0; max-width: 100%; box-sizing: border-box;">
+  <p style="font-size: 18px; font-style: italic; color: #065f46; line-height: 1.8; margin: 0;">"Data doesn't lie — but it does require the right context to be useful."</p>
+</blockquote>`,
+];
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN CLASS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export class ContentPostProcessor {
+
+  /**
+   * Process HTML content to enforce visual break rules.
+   * Finds consecutive <p> blocks exceeding maxConsecutiveWords and injects
+   * styled visual break elements between them.
+   */
+  static process(
+    html: string,
+    options: ProcessOptions = {}
+  ): PostProcessingResult {
+    const maxWords = options.maxConsecutiveWords || 200;
+    const usePullQuotes = options.usePullQuotes !== false;
+
+    if (!html || html.trim().length === 0) {
+      return {
+        html,
+        wasModified: false,
+        violations: [],
+        elementsInjected: 0,
+      };
+    }
+
+    // Find violations (consecutive <p> blocks exceeding word limit)
+    const violations = ContentPostProcessor.findViolations(html, maxWords);
+
+    if (violations.length === 0) {
+      return {
+        html,
+        wasModified: false,
+        violations: [],
+        elementsInjected: 0,
+      };
+    }
+
+    // Fix violations by injecting visual break elements
+    let result = html;
+    let elementsInjected = 0;
+    let offset = 0;
+
+    // Build pool of break elements
+    const breakPool = [...BREAK_ELEMENTS];
+    if (usePullQuotes) {
+      breakPool.push(...PULL_QUOTES);
+    }
+
+    // Process violations in reverse order to preserve indices
+    const sortedViolations = [...violations].sort((a, b) => b.startIndex - a.startIndex);
+
+    for (const violation of sortedViolations) {
+      // Find a good insertion point (between paragraphs near the middle of the violation)
+      const violationHtml = result.substring(violation.startIndex, violation.endIndex);
+      const paragraphs = violationHtml.match(/<\/p>/gi) || [];
+
+      if (paragraphs.length < 2) continue;
+
+      // Find the midpoint paragraph break
+      const midParagraphIndex = Math.floor(paragraphs.length / 2);
+      let currentParagraphEnd = 0;
+      let insertionPoint = -1;
+
+      for (let i = 0; i <= midParagraphIndex; i++) {
+        const nextEnd = violationHtml.indexOf('</p>', currentParagraphEnd);
+        if (nextEnd !== -1) {
+          currentParagraphEnd = nextEnd + 4; // length of '</p>'
+          if (i === midParagraphIndex) {
+            insertionPoint = violation.startIndex + currentParagraphEnd;
+          }
         }
       }
+
+      if (insertionPoint === -1) continue;
+
+      // Select a break element (cycle through pool)
+      const breakElement = breakPool[elementsInjected % breakPool.length];
+
+      // Insert the break element
+      result =
+        result.substring(0, insertionPoint) +
+        '\n\n' + breakElement + '\n\n' +
+        result.substring(insertionPoint);
+
+      elementsInjected++;
     }
 
-    // Strategy 2: Add underused terms by strengthening existing mentions
-    for (const term of underusedTerms.slice(0, 10)) {
-      const termLower = term.toLowerCase();
-      const regex = new RegExp(`(${termLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'i');
-      
-      // Find a paragraph without this term and add it
-      for (const p of paragraphs) {
-        const pText = p.replace(/<[^>]*>/g, '').toLowerCase();
-        if (!pText.includes(termLower) && pText.length > 80) {
-          const enrichedP = p.replace(
-            /<\/p>/i,
-            ` Understanding ${term} is essential for achieving optimal results.</p>`
-          );
-          content = content.replace(p, enrichedP);
-          break;
+    return {
+      html: result,
+      wasModified: elementsInjected > 0,
+      violations,
+      elementsInjected,
+    };
+  }
+
+  /**
+   * Find consecutive <p> blocks that exceed the word limit without a visual break.
+   */
+  static findViolations(html: string, maxWords: number): Violation[] {
+    const violations: Violation[] = [];
+
+    // Visual break elements that reset the consecutive word counter
+    const breakPatterns = [
+      /<div\s[^>]*style\s*=/i,
+      /<table[\s>]/i,
+      /<blockquote[\s>]/i,
+      /<details[\s>]/i,
+      /<figure[\s>]/i,
+      /<ul[\s>]/i,
+      /<ol[\s>]/i,
+      /<h[1-6][\s>]/i,
+      /<hr[\s>/]/i,
+      /<iframe[\s>]/i,
+      /<!-- .* -->/i,
+    ];
+
+    // Split content into segments separated by visual breaks
+    // We'll walk through the HTML and track consecutive <p> word counts
+
+    const tagRegex = /<\/?[a-z][^>]*>/gi;
+    let lastIndex = 0;
+    let consecutiveWords = 0;
+    let segmentStart = 0;
+    let inParagraph = false;
+
+    // Simple approach: find all <p>...</p> blocks and check gaps between visual elements
+    const pBlocks = html.match(/<p[^>]*>[\s\S]*?<\/p>/gi) || [];
+
+    if (pBlocks.length === 0) return violations;
+
+    let currentRunStart = -1;
+    let currentRunWords = 0;
+
+    for (let i = 0; i < pBlocks.length; i++) {
+      const block = pBlocks[i];
+      const blockIndex = html.indexOf(block, lastIndex);
+
+      if (blockIndex === -1) continue;
+
+      // Check if there's a visual break between this block and the last one
+      if (lastIndex > 0 && blockIndex > lastIndex) {
+        const between = html.substring(lastIndex, blockIndex);
+        const hasBreak = breakPatterns.some(pattern => pattern.test(between));
+
+        if (hasBreak) {
+          // Check if the current run exceeds the limit
+          if (currentRunWords > maxWords && currentRunStart !== -1) {
+            const text = html.substring(currentRunStart, lastIndex).replace(/<[^>]*>/g, ' ').trim();
+            violations.push({
+              startIndex: currentRunStart,
+              endIndex: lastIndex,
+              wordCount: currentRunWords,
+              textSnippet: text.substring(0, 80) + '...',
+            });
+          }
+          // Reset the run
+          currentRunStart = blockIndex;
+          currentRunWords = 0;
         }
       }
+
+      if (currentRunStart === -1) {
+        currentRunStart = blockIndex;
+      }
+
+      // Count words in this paragraph
+      const plainText = block.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      const wordCount = plainText ? plainText.split(' ').filter(Boolean).length : 0;
+      currentRunWords += wordCount;
+
+      lastIndex = blockIndex + block.length;
     }
+
+    // Check the final run
+    if (currentRunWords > maxWords && currentRunStart !== -1) {
+      const text = html.substring(currentRunStart, lastIndex).replace(/<[^>]*>/g, ' ').trim();
+      violations.push({
+        startIndex: currentRunStart,
+        endIndex: lastIndex,
+        wordCount: currentRunWords,
+        textSnippet: text.substring(0, 80) + '...',
+      });
+    }
+
+    return violations;
   }
 
-  return content;
+  /**
+   * Validate that content passes visual break rules.
+   */
+  static validate(
+    html: string,
+    maxWords: number = 200
+  ): { valid: boolean; violations: Violation[] } {
+    const violations = ContentPostProcessor.findViolations(html, maxWords);
+    return {
+      valid: violations.length === 0,
+      violations,
+    };
+  }
 }
 
-/**
- * Adds FAQ schema-friendly section at the end of the content if PAA questions exist.
- */
-export function addFaqSection(
-  html: string,
-  questions: { question: string; answer: string }[]
-): string {
-  if (!questions || questions.length === 0) return html;
-
-  const faqHtml = `
-<hr style="border: none; border-top: 2px solid #f1f5f9; margin: 48px 0;" />
-<h2 style="margin-top: 48px; margin-bottom: 24px;">Frequently Asked Questions</h2>
-<div style="space-y: 16px;">
-${questions.map(q => `
-<div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px 24px; margin-bottom: 16px;">
-  <h3 style="font-size: 18px; font-weight: 700; color: #0f172a; margin: 0 0 12px;">${q.question}</h3>
-  <p style="color: #475569; line-height: 1.8; margin: 0;">${q.answer}</p>
-</div>
-`).join('')}
-</div>`;
-
-  return html + faqHtml;
-}
-
-/**
- * Full post-processing pipeline for generated content.
- */
-export function postProcessContent(
-  html: string,
-  options: {
-    neuronAnalysis?: NeuronWriterAnalysis;
-    faqQuestions?: { question: string; answer: string }[];
-    enhanceDesign?: boolean;
-    injectTerms?: boolean;
-  } = {}
-): { content: string; neuronScore: number } {
-  let content = html;
-
-  // Step 1: Enhance HTML design
-  if (options.enhanceDesign !== false) {
-    content = enhanceHtmlDesign(content);
-  }
-
-  // Step 2: Inject missing NeuronWriter terms
-  if (options.injectTerms !== false && options.neuronAnalysis) {
-    content = injectMissingTerms(content, options.neuronAnalysis);
-  }
-
-  // Step 3: Add FAQ section
-  if (options.faqQuestions && options.faqQuestions.length > 0) {
-    content = addFaqSection(content, options.faqQuestions);
-  }
-
-  // Step 4: Calculate final NeuronWriter score
-  let neuronScore = 0;
-  if (options.neuronAnalysis) {
-    const scoreResult = scoreContentAgainstNeuron(content, options.neuronAnalysis);
-    neuronScore = scoreResult.score;
-  }
-
-  return { content, neuronScore };
-}
-
-export default {
-  enhanceHtmlDesign,
-  injectMissingTerms,
-  addFaqSection,
-  postProcessContent,
-};
+export default ContentPostProcessor;
