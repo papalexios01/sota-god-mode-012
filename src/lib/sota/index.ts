@@ -1,36 +1,37 @@
 // src/lib/sota/index.ts
-// SOTA Content Engine - Enterprise Barrel Export v3.1 (Fixed)
+// SOTA Content Engine — Enterprise Barrel Export v3.2 (All exports verified)
 
-// Core Types
+// ─── Core Types ──────────────────────────────────────────────────────────────
 export type {
   GeneratedContent,
   ContentGenerationOptions,
   QualityScore,
   ContentMetrics,
-  NeuronWriterAnalysis,
 } from "./types";
 
-// Internal Link Engine
-export { generateInternalLinks, applyInternalLinks } from "./SOTAInternalLinkEngine";
-export type { InternalLink, SitemapUrl } from "./SOTAInternalLinkEngine";
-
-// NeuronWriter Service — Class, Factory, Scoring, and Types
+// ─── NeuronWriter Service (class + factory + scoring + types) ────────────────
 export {
   NeuronWriterService,
   createNeuronWriterService,
   scoreContentAgainstNeuron,
 } from "./NeuronWriterService";
-export type { NeuronWriterTermData, NeuronWriterHeadingData } from "./NeuronWriterService";
 
-// Backward-compatible aliases for removed standalone functions
-// (Other files may still import these — safe no-op wrappers)
+export type {
+  NeuronWriterAnalysis,
+  NeuronWriterTermData,
+  NeuronWriterHeadingData,
+} from "./NeuronWriterService";
+
+// Backward-compatible standalone wrappers (old code may still import these)
+import { NeuronWriterService as _NWService } from "./NeuronWriterService";
+import type { NeuronWriterAnalysis as _NWAnalysis } from "./NeuronWriterService";
+
 export async function fetchNeuronWriterAnalysis(
   apiKey: string,
   projectId: string,
-  keyword: string
-): Promise<any> {
-  const { createNeuronWriterService: create } = await import("./NeuronWriterService");
-  const service = create(apiKey);
+  keyword: string,
+): Promise<{ success: boolean; analysis?: _NWAnalysis; error?: string }> {
+  const service = new _NWService(apiKey);
   const queryResult = await service.findQueryByKeyword(projectId, keyword);
   if (!queryResult.success || !queryResult.query) {
     return { success: false, error: queryResult.error || "Query not found" };
@@ -39,55 +40,68 @@ export async function fetchNeuronWriterAnalysis(
 }
 
 export function buildNeuronWriterPromptSection(
-  analysis: any
+  analysis: _NWAnalysis | null | undefined,
 ): string {
   if (!analysis) return "";
-  const { createNeuronWriterService: create } = require("./NeuronWriterService");
-  const service = create("unused");
-  const terms = analysis.terms || [];
-  return service.formatTermsForPrompt(terms, analysis);
+  const service = new _NWService("unused");
+  return service.formatTermsForPrompt(analysis.terms || [], analysis);
 }
 
-// Content Prompt Builder
+// ─── Internal Link Engine ────────────────────────────────────────────────────
+export { generateInternalLinks, applyInternalLinks } from "./SOTAInternalLinkEngine";
+export type { InternalLink, SitemapUrl } from "./SOTAInternalLinkEngine";
+
+// ─── Content Prompt Builder ──────────────────────────────────────────────────
 export { buildMasterSystemPrompt, buildMasterUserPrompt } from "./prompts/masterContentPrompt";
 export type { ContentPromptConfig } from "./prompts/masterContentPrompt";
 
-// Content Post-Processor
-export { enhanceHtmlDesign, injectMissingTerms, addFaqSection, postProcessContent } from "./ContentPostProcessor";
+// ─── Content Post-Processor ──────────────────────────────────────────────────
+export {
+  ContentPostProcessor,
+  enhanceHtmlDesign,
+  injectMissingTerms,
+  addFaqSection,
+  postProcessContent,
+} from "./ContentPostProcessor";
 
-// Schema Generator
+// ─── Schema Generator ────────────────────────────────────────────────────────
 export { SchemaGenerator } from "./SchemaGenerator";
 
-// EEAT Validator
+// ─── EEAT Validator ──────────────────────────────────────────────────────────
 export { EEATValidator } from "./EEATValidator";
 
-// Quality Validator
+// ─── Quality Validator ───────────────────────────────────────────────────────
 export { QualityValidator } from "./QualityValidator";
 
-// Performance Tracker
+// ─── Performance Tracker ─────────────────────────────────────────────────────
 export { PerformanceTracker, globalPerformanceTracker } from "./PerformanceTracker";
 export type { AnalyticsDashboardData } from "./PerformanceTracker";
 
-// Reference Service
+// ─── Reference Service ───────────────────────────────────────────────────────
 export { ReferenceService } from "./ReferenceService";
 
-// YouTube Service
+// ─── YouTube Service ─────────────────────────────────────────────────────────
 export { YouTubeService } from "./YouTubeService";
 
-// SERP Analyzer
+// ─── SERP Analyzer ───────────────────────────────────────────────────────────
 export { SERPAnalyzer } from "./SERPAnalyzer";
 
-// SEO Health Scorer
+// ─── SEO Health Scorer ───────────────────────────────────────────────────────
 export { SEOHealthScorer } from "./SEOHealthScorer";
 
-// God Mode Engine
+// ─── God Mode Engine ─────────────────────────────────────────────────────────
 export { GodModeEngine } from "./GodModeEngine";
 
-// Cache
+// ─── Cache ───────────────────────────────────────────────────────────────────
 export { SOTACache } from "./cache";
 
-// Sanitize — handle both old and new export names
-export { sanitizeHtml as sanitizeContent, sanitizeHtml, stripHtml, htmlToText } from "./sanitize";
+// ─── Sanitize (export both old and new names for compatibility) ──────────────
+export {
+  sanitizeHtml as sanitizeContent,
+  sanitizeHtml,
+  stripHtml,
+  htmlToText,
+} from "./sanitize";
 
-// Enterprise Orchestrator
+// ─── Enterprise Orchestrator ─────────────────────────────────────────────────
 export { createOrchestrator } from "./EnterpriseContentOrchestrator";
