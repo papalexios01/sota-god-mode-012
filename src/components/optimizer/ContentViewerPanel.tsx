@@ -133,11 +133,18 @@ export function ContentViewerPanel({
     });
   }, [content]);
 
+  // Derive effective NeuronWriter data — fallback to generatedContent.neuronWriterAnalysis if prop is null
+  const effectiveNeuronData = useMemo(() => {
+    if (neuronData) return neuronData;
+    if (generatedContent?.neuronWriterAnalysis) return generatedContent.neuronWriterAnalysis;
+    return null;
+  }, [neuronData, generatedContent]);
+
   // NeuronWriter live scoring
   const neuronLiveScore = useMemo(() => {
-    if (!neuronData) return null;
-    return scoreContentAgainstNeuron(content, neuronData);
-  }, [content, neuronData]);
+    if (!effectiveNeuronData) return null;
+    return scoreContentAgainstNeuron(content, effectiveNeuronData);
+  }, [content, effectiveNeuronData]);
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(content);
@@ -297,11 +304,11 @@ export function ContentViewerPanel({
 
   // ─── Tab Configuration ─────────────────────────────────────────────
 
-  const neuronTermCount = neuronData
-    ? (neuronData.basicKeywords?.length || 0) +
-    (neuronData.extendedKeywords?.length || 0) +
-    (neuronData.entities?.length || 0)
-    : (neuronData as any)?.terms?.length || 0;
+  const neuronTermCount = effectiveNeuronData
+    ? (effectiveNeuronData.basicKeywords?.length || effectiveNeuronData.terms?.length || 0) +
+    (effectiveNeuronData.extendedKeywords?.length || effectiveNeuronData.termsExtended?.length || 0) +
+    (effectiveNeuronData.entities?.length || 0)
+    : 0;
 
   const tabs: { id: ViewTab; label: string; icon: React.ReactNode; badge?: number }[] = [
     { id: 'preview', label: 'Preview', icon: <Eye className="w-4 h-4" /> },
@@ -846,7 +853,7 @@ export function ContentViewerPanel({
             {/* ────── NEURONWRITER TAB (COMPLETELY REDESIGNED) ────── */}
             {activeTab === 'neuron' && (
               <NeuronWriterTab
-                neuronData={neuronData}
+                neuronData={effectiveNeuronData}
                 content={displayContent}
                 neuronLiveScore={neuronLiveScore}
               />
@@ -952,9 +959,11 @@ function NeuronWriterTab({ neuronData, content, neuronLiveScore }: NeuronWriterT
   };
 
   const hasStructuredData = neuronData && (
-    Array.isArray(neuronData.basicKeywords) ||
-    Array.isArray(neuronData.extendedKeywords) ||
-    Array.isArray(neuronData.entities)
+    (Array.isArray(neuronData.basicKeywords) && neuronData.basicKeywords.length > 0) ||
+    (Array.isArray(neuronData.extendedKeywords) && neuronData.extendedKeywords.length > 0) ||
+    (Array.isArray(neuronData.entities) && neuronData.entities.length > 0) ||
+    (Array.isArray(neuronData.terms) && neuronData.terms.length > 0) ||
+    (Array.isArray(neuronData.termsExtended) && neuronData.termsExtended.length > 0)
   );
 
   const legacyTerms: any[] = !hasStructuredData && (neuronData as any)?.terms
@@ -1117,20 +1126,26 @@ function NeuronWriterTab({ neuronData, content, neuronLiveScore }: NeuronWriterT
       {/* ── Structured Sections (new NeuronWriterService data) ── */}
       {hasStructuredData ? (
         <div className="space-y-6">
-          {/* Basic Keywords */}
-          <NeuronSection title="Basic Keywords" subtitle="High priority — MUST use all" icon={<Target className="w-5 h-5 text-red-400" />} accentColor="red" isExpanded={expandedSections.basic} onToggle={() => toggleSection('basic')} count={neuronData.basicKeywords?.length || 0}>
-            <TermGrid terms={neuronData.basicKeywords || []} content={contentLower} filter={termFilter} />
-          </NeuronSection>
+          {/* Basic Keywords (prefer basicKeywords, fallback to terms) */}
+          {((neuronData.basicKeywords && neuronData.basicKeywords.length > 0) || (neuronData.terms && neuronData.terms.length > 0)) && (
+            <NeuronSection title="Basic Keywords" subtitle="High priority — MUST use all" icon={<Target className="w-5 h-5 text-red-400" />} accentColor="red" isExpanded={expandedSections.basic} onToggle={() => toggleSection('basic')} count={(neuronData.basicKeywords?.length || neuronData.terms?.length || 0)}>
+              <TermGrid terms={neuronData.basicKeywords || neuronData.terms || []} content={contentLower} filter={termFilter} />
+            </NeuronSection>
+          )}
 
-          {/* Extended Keywords */}
-          <NeuronSection title="Extended Keywords" subtitle="Medium priority — use most" icon={<Layers className="w-5 h-5 text-blue-400" />} accentColor="blue" isExpanded={expandedSections.extended} onToggle={() => toggleSection('extended')} count={neuronData.extendedKeywords?.length || 0}>
-            <TermGrid terms={neuronData.extendedKeywords || []} content={contentLower} filter={termFilter} />
-          </NeuronSection>
+          {/* Extended Keywords (prefer extendedKeywords, fallback to termsExtended) */}
+          {((neuronData.extendedKeywords && neuronData.extendedKeywords.length > 0) || (neuronData.termsExtended && neuronData.termsExtended.length > 0)) && (
+            <NeuronSection title="Extended Keywords" subtitle="Medium priority — use most" icon={<Layers className="w-5 h-5 text-blue-400" />} accentColor="blue" isExpanded={expandedSections.extended} onToggle={() => toggleSection('extended')} count={(neuronData.extendedKeywords?.length || neuronData.termsExtended?.length || 0)}>
+              <TermGrid terms={neuronData.extendedKeywords || neuronData.termsExtended || []} content={contentLower} filter={termFilter} />
+            </NeuronSection>
+          )}
 
           {/* Entities */}
-          <NeuronSection title="Entities" subtitle="Semantic relevance — include naturally" icon={<Tag className="w-5 h-5 text-purple-400" />} accentColor="purple" isExpanded={expandedSections.entities} onToggle={() => toggleSection('entities')} count={neuronData.entities?.length || 0}>
-            <TermGrid terms={neuronData.entities || []} content={contentLower} filter={termFilter} />
-          </NeuronSection>
+          {neuronData.entities && neuronData.entities.length > 0 && (
+            <NeuronSection title="Entities" subtitle="Semantic relevance — include naturally" icon={<Tag className="w-5 h-5 text-purple-400" />} accentColor="purple" isExpanded={expandedSections.entities} onToggle={() => toggleSection('entities')} count={neuronData.entities.length}>
+              <TermGrid terms={neuronData.entities || []} content={contentLower} filter={termFilter} />
+            </NeuronSection>
+          )}
 
           {/* H1 Suggestions */}
           {neuronData.h1Suggestions && neuronData.h1Suggestions.length > 0 && (
@@ -1139,17 +1154,17 @@ function NeuronWriterTab({ neuronData, content, neuronLiveScore }: NeuronWriterT
             </NeuronSection>
           )}
 
-          {/* H2 Suggestions */}
-          {neuronData.h2Suggestions && neuronData.h2Suggestions.length > 0 && (
-            <NeuronSection title="H2 Heading Suggestions" subtitle="Use or adapt these headings in your content" icon={<Hash className="w-5 h-5 text-emerald-400" />} accentColor="emerald" isExpanded={expandedSections.h2} onToggle={() => toggleSection('h2')} count={neuronData.h2Suggestions.length}>
-              <HeadingList headings={neuronData.h2Suggestions} />
+          {/* H2 Suggestions (prefer h2Suggestions, fallback to headingsH2) */}
+          {((neuronData.h2Suggestions && neuronData.h2Suggestions.length > 0) || (neuronData.headingsH2 && neuronData.headingsH2.length > 0)) && (
+            <NeuronSection title="H2 Heading Suggestions" subtitle="Use or adapt these headings in your content" icon={<Hash className="w-5 h-5 text-emerald-400" />} accentColor="emerald" isExpanded={expandedSections.h2} onToggle={() => toggleSection('h2')} count={(neuronData.h2Suggestions?.length || neuronData.headingsH2?.length || 0)}>
+              <HeadingList headings={(neuronData.h2Suggestions || neuronData.headingsH2?.map(h => ({ text: h.text, level: 'h2' as const, relevanceScore: h.usage_pc ? Math.round(h.usage_pc * 100) : undefined }))) || []} />
             </NeuronSection>
           )}
 
-          {/* H3 Suggestions */}
-          {neuronData.h3Suggestions && neuronData.h3Suggestions.length > 0 && (
-            <NeuronSection title="H3 Subheading Suggestions" subtitle="Sub-topics to cover within sections" icon={<List className="w-5 h-5 text-cyan-400" />} accentColor="cyan" isExpanded={expandedSections.h3} onToggle={() => toggleSection('h3')} count={neuronData.h3Suggestions.length}>
-              <HeadingList headings={neuronData.h3Suggestions} />
+          {/* H3 Suggestions (prefer h3Suggestions, fallback to headingsH3) */}
+          {((neuronData.h3Suggestions && neuronData.h3Suggestions.length > 0) || (neuronData.headingsH3 && neuronData.headingsH3.length > 0)) && (
+            <NeuronSection title="H3 Subheading Suggestions" subtitle="Sub-topics to cover within sections" icon={<List className="w-5 h-5 text-cyan-400" />} accentColor="cyan" isExpanded={expandedSections.h3} onToggle={() => toggleSection('h3')} count={(neuronData.h3Suggestions?.length || neuronData.headingsH3?.length || 0)}>
+              <HeadingList headings={(neuronData.h3Suggestions || neuronData.headingsH3?.map(h => ({ text: h.text, level: 'h3' as const, relevanceScore: h.usage_pc ? Math.round(h.usage_pc * 100) : undefined }))) || []} />
             </NeuronSection>
           )}
 
@@ -1301,7 +1316,7 @@ interface NeuronSectionProps {
   children: React.ReactNode;
 }
 
-function NeuronSection({ title, subtitle, icon, isExpanded, onToggle, count, children }: NeuronSectionProps) {
+function NeuronSection({ title, subtitle, icon, accentColor, isExpanded, onToggle, count, children }: NeuronSectionProps) {
   const accentColors: Record<string, string> = {
     red: "bg-red-500/20 border-red-500/20 text-red-100",
     blue: "bg-blue-500/20 border-blue-500/20 text-blue-100",

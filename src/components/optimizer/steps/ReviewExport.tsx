@@ -83,19 +83,72 @@ function reconstructGeneratedContent(stored: GeneratedContentStore[string] | und
 }
 
 // Helper to reconstruct NeuronWriterAnalysis from persisted store
+// Populates BOTH old-style (terms, headingsH2) AND new-style (basicKeywords, h2Suggestions) fields
+// so the structured NeuronWriterTab view renders correctly instead of falling to legacy view.
 function reconstructNeuronData(stored: NeuronWriterDataStore[string] | undefined): NeuronWriterAnalysis | null {
   if (!stored) return null;
+
+  const terms = stored.terms.map(t => ({ ...t, type: t.type as 'required' | 'recommended' | 'optional' }));
+  const termsExtended = stored.termsExtended?.map(t => ({ ...t, type: t.type as 'required' | 'recommended' | 'optional' })) || [];
+  const entities = stored.entities?.map(e => ({ entity: e.entity, type: e.type, usage_pc: e.usage_pc })) || [];
+  const headingsH2 = stored.headingsH2?.map(h => ({ text: h.text, level: 'h2' as const, usage_pc: h.usage_pc })) || [];
+  const headingsH3 = stored.headingsH3?.map(h => ({ text: h.text, level: 'h3' as const, usage_pc: h.usage_pc })) || [];
+
+  // Map old-style terms → new-style basicKeywords/extendedKeywords for NeuronWriterTab structured view
+  const basicKeywords = terms.map(t => ({
+    term: t.term,
+    type: 'basic' as const,
+    weight: t.weight,
+    recommended: t.sugg_usage ? t.sugg_usage[1] : Math.max(1, Math.round(t.weight * 3)),
+    found: 0,
+    status: 'missing' as const,
+  }));
+
+  const extendedKeywords = termsExtended.map(t => ({
+    term: t.term,
+    type: 'extended' as const,
+    weight: t.weight,
+    recommended: Math.max(1, Math.round(t.weight * 2)),
+    found: 0,
+    status: 'missing' as const,
+  }));
+
+  const h2Suggestions = headingsH2.map(h => ({
+    text: h.text,
+    level: 'h2' as const,
+    relevanceScore: h.usage_pc ? Math.round(h.usage_pc * 100) : undefined,
+  }));
+
+  const h3Suggestions = headingsH3.map(h => ({
+    text: h.text,
+    level: 'h3' as const,
+    relevanceScore: h.usage_pc ? Math.round(h.usage_pc * 100) : undefined,
+  }));
+
   return {
     query_id: stored.query_id,
     keyword: stored.keyword,
     status: stored.status,
-    terms: stored.terms.map(t => ({ ...t, type: t.type as 'required' | 'recommended' | 'optional' })),
-    termsExtended: stored.termsExtended?.map(t => ({ ...t, type: t.type as 'required' | 'recommended' | 'optional' })) || [],
-    entities: stored.entities?.map(e => ({ entity: e.entity, type: e.type, usage_pc: e.usage_pc })) || [],
-    headingsH2: stored.headingsH2?.map(h => ({ text: h.text, level: 'h2' as const, usage_pc: h.usage_pc })) || [],
-    headingsH3: stored.headingsH3?.map(h => ({ text: h.text, level: 'h3' as const, usage_pc: h.usage_pc })) || [],
+    // Old-style fields (for live scoring, backward compat)
+    terms,
+    termsExtended,
+    entities,
+    headingsH2,
+    headingsH3,
     recommended_length: stored.recommended_length,
     content_score: stored.content_score,
+    // New-style fields (for NeuronWriterTab structured view)
+    basicKeywords,
+    extendedKeywords,
+    h2Suggestions,
+    h3Suggestions,
+    recommendations: {
+      targetWordCount: stored.recommended_length || 2500,
+      targetScore: 90,
+      minH2Count: headingsH2.length > 0 ? Math.min(6, headingsH2.length) : 6,
+      minH3Count: headingsH3.length > 0 ? Math.min(8, headingsH3.length) : 8,
+      contentGaps: [],
+    },
   };
 }
 
