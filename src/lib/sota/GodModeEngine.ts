@@ -131,7 +131,8 @@ export class GodModeEngine {
     this.queue = [];
 
     const appConfig = this.options.getAppConfig();
-    const hasNeuronWriter = !!(appConfig.neuronWriterApiKey && appConfig.neuronWriterProjectId);
+    const hasNeuronWriterKey = !!(appConfig.neuronWriterApiKey?.trim()) && appConfig.neuronWriterApiKey.trim().length >= 10;
+    const hasNeuronWriter = (appConfig.enableNeuronWriter || hasNeuronWriterKey) && !!(appConfig.neuronWriterProjectId?.trim());
 
     this.log('info', '=== PRIORITY ONLY MODE - INITIALIZATION ===', '');
 
@@ -723,13 +724,14 @@ export class GodModeEngine {
       return { url, title };
     });
 
-    // Only pass NeuronWriter keys when explicitly enabled
-    const useNeuronWriter = appConfig.enableNeuronWriter &&
-      !!(appConfig.neuronWriterApiKey?.trim()) &&
-      !!(appConfig.neuronWriterProjectId?.trim());
+    // SOTA FAILSAFE: Pass NeuronWriter keys if EITHER the flag is on OR a valid-looking key is present.
+    // This mirrors the ReviewExport.tsx failsafe so NeuronWriter is NEVER silently dropped.
+    const hasNeuronWriterKey = !!(appConfig.neuronWriterApiKey?.trim()) && appConfig.neuronWriterApiKey.trim().length >= 10;
+    const hasNeuronWriterProject = !!(appConfig.neuronWriterProjectId?.trim());
+    const useNeuronWriter = (appConfig.enableNeuronWriter || hasNeuronWriterKey) && hasNeuronWriterProject;
 
     this.log('info', `Orchestrator init`,
-      `${sitePages.length} sitePages for linking, NeuronWriter: ${useNeuronWriter ? 'ON' : 'OFF'}`);
+      `${sitePages.length} sitePages for linking, NeuronWriter: ${useNeuronWriter ? 'ON' : 'OFF'} (flag=${appConfig.enableNeuronWriter}, keyPresent=${hasNeuronWriterKey})`);
 
     this.orchestrator = new EnterpriseContentOrchestrator({
       apiKeys: {

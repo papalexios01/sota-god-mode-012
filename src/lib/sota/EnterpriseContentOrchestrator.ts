@@ -669,20 +669,31 @@ Now continue:`;
         this.warn(`NeuronWriter: Search failed (${searchErr}), will create new query`);
       }
 
-      // Step 2: Create new query if needed
+      // Step 2: Create new query if needed — with retry to prevent silent fallback
       if (!queryId) {
-        this.log(`NeuronWriter: Creating new Content Writer query for "${keyword}"...`);
-        try {
-          const created = await service.createQuery(projectId, keyword);
-          if (!created.success || !created.queryId) {
-            this.warn(`NeuronWriter: FAILED to create query — ${created.error || 'unknown error'}`);
-            this.log('NeuronWriter: Proceeding WITHOUT NeuronWriter optimization');
-            return null;
+        const MAX_CREATE_RETRIES = 3;
+        for (let createAttempt = 1; createAttempt <= MAX_CREATE_RETRIES; createAttempt++) {
+          this.log(`NeuronWriter: Creating new Content Writer query for "${keyword}"... (attempt ${createAttempt}/${MAX_CREATE_RETRIES})`);
+          try {
+            const created = await service.createQuery(projectId, keyword);
+            if (created.success && created.queryId) {
+              queryId = created.queryId;
+              this.log(`NeuronWriter: Created NEW query (ID: ${queryId})`);
+              break;
+            }
+            this.warn(`NeuronWriter: Create attempt ${createAttempt} failed — ${created.error || 'unknown error'}`);
+          } catch (createErr) {
+            this.warn(`NeuronWriter: Create attempt ${createAttempt} error — ${createErr}`);
           }
-          queryId = created.queryId;
-          this.log(`NeuronWriter: Created NEW query (ID: ${queryId})`);
-        } catch (createErr) {
-          this.warn(`NeuronWriter: Query creation failed — ${createErr}`);
+          if (createAttempt < MAX_CREATE_RETRIES) {
+            const retryDelay = createAttempt * 3000;
+            this.log(`NeuronWriter: Retrying query creation in ${retryDelay / 1000}s...`);
+            await this.sleep(retryDelay);
+          }
+        }
+        if (!queryId) {
+          this.warn(`NeuronWriter: FAILED to create query after ${MAX_CREATE_RETRIES} attempts`);
+          this.log('NeuronWriter: Proceeding WITHOUT NeuronWriter optimization');
           return null;
         }
       }
@@ -690,11 +701,14 @@ Now continue:`;
       this.log(`NeuronWriter: Using provided query ID: ${queryId}`);
     }
 
-    // Step 3: Poll for analysis readiness
+    // Step 3: Poll for analysis readiness — extended with resilient retry
     let lastStatus = '';
+    let consecutivePollErrors = 0;
+    const MAX_CONSECUTIVE_POLL_ERRORS = 5;
     for (let attempt = 1; attempt <= NW_MAX_POLL_ATTEMPTS; attempt++) {
       try {
         const analysisRes = await service.getQueryAnalysis(queryId);
+        consecutivePollErrors = 0;
 
         if (analysisRes.success && analysisRes.analysis) {
           const summary = service.getAnalysisSummary(analysisRes.analysis);
@@ -728,12 +742,17 @@ Now continue:`;
         this.log(`NeuronWriter: Waiting for analysis… (attempt ${attempt}/${NW_MAX_POLL_ATTEMPTS})`);
         await this.sleep(delay);
       } catch (pollErr) {
+        consecutivePollErrors++;
         this.warn(`NeuronWriter: Poll attempt ${attempt} failed — ${pollErr}`);
-        if (attempt >= NW_MAX_POLL_ATTEMPTS) return null;
+        if (consecutivePollErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
+          this.warn(`NeuronWriter: ${MAX_CONSECUTIVE_POLL_ERRORS} consecutive poll errors — giving up`);
+          return null;
+        }
+        await this.sleep(3000);
       }
     }
 
-    this.warn('NeuronWriter: Analysis timed out after 40 attempts (~4 minutes)');
+    this.warn(`NeuronWriter: Analysis timed out after ${NW_MAX_POLL_ATTEMPTS} attempts`);
     this.log('NeuronWriter: Proceeding WITHOUT NeuronWriter optimization — check NeuronWriter dashboard');
     return null;
   }
@@ -1890,9 +1909,28 @@ Write the complete article now. Output ONLY HTML.`;
       serpAnalysis = this.getDefaultSerpAnalysis(options.keyword);
     }
 
+    // SOTA FAILSAFE: If NeuronWriter is configured but init failed, retry once before proceeding
+    const nwConfigured = !!(this.config.neuronWriterApiKey?.trim()) && !!(this.config.neuronWriterProjectId?.trim());
+    if (nwConfigured && !neuron) {
+      this.log('NeuronWriter: Configured but failed to init — retrying once...');
+      try {
+        neuron = await this.maybeInitNeuronWriter(options.keyword, options);
+        if (neuron) {
+          this.log('NeuronWriter: Retry SUCCEEDED — NeuronWriter is now active ✅');
+        } else {
+          this.warn('NeuronWriter: Retry also failed — proceeding WITHOUT NeuronWriter (check API key/project)');
+        }
+      } catch (retryErr) {
+        this.warn(`NeuronWriter: Retry error — ${retryErr}`);
+      }
+    }
+
     const phase1Ms = endPhase1Timer();
     this.log(`Phase 1 complete in ${(phase1Ms / 1000).toFixed(1)}s — ${videos.length} videos, ${references.length} references`);
     this.log(`SERP Analysis: ${serpAnalysis.userIntent} intent, ${serpAnalysis.recommendedWordCount} words recommended`);
+    if (nwConfigured) {
+      this.log(`NeuronWriter: ${neuron ? 'ACTIVE ✅' : 'INACTIVE ❌ — content will proceed without NW optimization'}`);
+    }
 
     // ═════════════════════════════════════════════════════════════════════
     // PHASE 2: AI CONTENT GENERATION
