@@ -21,7 +21,7 @@ export interface NeuronWriterTerm {
   frequency: number;
   type: 'required' | 'recommended' | 'optional';
   usage_pc?: number;
-}
+} 
 
 export interface NeuronWriterEntity {
   entity: string;
