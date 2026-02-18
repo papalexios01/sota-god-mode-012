@@ -514,6 +514,11 @@ export class NeuronWriterService {
         headingsH2: this.parseHeadings(data.headingsH2 || data.headings_h2 || []),
         headingsH3: this.parseHeadings(data.headingsH3 || data.headings_h3 || []),
       };
+      
+     // Validate that we got terms
+     if (!analysis.terms?.length && !analysis.basicKeywords?.length) {
+       throw new Error('NeuronWriter returned empty keyword data — check project/query config');
+     }
 
       return { success: true, analysis };
     } catch (e) {
