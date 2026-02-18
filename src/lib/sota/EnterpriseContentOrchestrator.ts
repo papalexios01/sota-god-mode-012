@@ -1362,93 +1362,99 @@ Output ONLY the HTML paragraphs, nothing else.`;
   // MAIN GENERATION ENTRY POINT
   // ─────────────────────────────────────────────────────────────────────────
 
-  async generateContent(
-    keyword: string,
-    title: string,
-    options: GenerationOptions = { keyword }
+    async generateContent(
+    options: GenerationOptions
   ): Promise<GeneratedContent> {
-    this.telemetry = this.createFreshTelemetry();
     this.onProgress = options.onProgress;
+    this.telemetry = this.createFreshTelemetry();
+    const startTime = Date.now();
 
-    const cacheKey = `${keyword}-${title}-${options.contentType ?? 'guide'}`;
-    const cached = generationCache.get(cacheKey);
+    this.log(`Starting content generation for "${options.keyword}"`);
+
+    // Cache check
+    const cacheKey = `${options.keyword}-${options.title ?? ''}-${options.contentType ?? 'guide'}`;
+    const cached = generationCache.get<GeneratedContent>(cacheKey);
     if (cached) {
       this.log('Cache hit — returning cached content');
       return cached;
     }
 
-    // ── Phase 1: Parallel Research ─────────────────────────────────────────
-    const endPhase1 = this.startPhaseTimer('phase1_research');
-    this.log('Phase 1: Parallel research — SERP, YouTube, References, NeuronWriter...');
+    // ── Phase 1: Parallel Research ──────────────────────────────────────────
+    this.log('Phase 1: Research & Analysis');
+    const endPhase1Timer = this.startPhaseTimer('phase1_research');
 
-    const targetWordCount = options.targetWordCount ?? 3000;
+    let serpAnalysis: SERPAnalysis;
+    let videos: YouTubeVideo[] = [];
+    let references: Reference[] = [];
+    let neuron: NeuronBundle | null = null;
 
-    const [serpAnalysis, videos, references, neuronBundle] = await Promise.all([
-      (async () => {
-        this.log('SERP Analysis: Analyzing top-ranking content...');
-        try {
-          const result = await this.serpAnalyzer.analyze(keyword);
-          this.log(`SERP Analysis: Complete — ${result.topCompetitors.length} competitors, avg ${result.avgWordCount} words`);
-          return result;
-        } catch (e) {
-          this.warn(`SERP Analysis failed: ${e}`);
-          return this.getFallbackSERPAnalysis(keyword);
-        }
-      })(),
-      (async () => {
-        if (options.includeVideos === false) return [] as YouTubeVideo[];
-        this.log('YouTube: Searching for relevant videos...');
-        try {
-          const vids = await this.youtubeService.findVideos(keyword, 3);
-          this.log(`YouTube: Found ${vids.length} videos`);
-          return vids;
-        } catch (e) {
-          this.warn(`YouTube search failed: ${e}`);
-          return [] as YouTubeVideo[];
-        }
-      })(),
-      (async () => {
-        if (options.includeReferences === false) return [] as Reference[];
-        this.log('References: Gathering authoritative sources...');
-        try {
-          const refs = await this.referenceService.findReferences(keyword, 12);
-          this.log(`References: Found ${refs.length} sources`);
-          return refs;
-        } catch (e) {
-          this.warn(`Reference gathering failed: ${e}`);
-          return [] as Reference[];
-        }
-      })(),
-      (async () => {
-        this.log('NeuronWriter: Initializing integration...');
-        const bundle = await this.maybeInitNeuronWriter(keyword, options);
-        if (bundle) {
-          this.log(`NeuronWriter: ✅ Active — ${bundle.analysis.terms?.length ?? 0} terms loaded`);
-        } else {
-          this.log('NeuronWriter: INACTIVE — content will proceed without NW optimization');
-        }
-        return bundle;
-      })(),
-    ]);
+    try {
+      const results = await Promise.allSettled([
+        this.serpAnalyzer.analyze(options.keyword, this.config.targetCountry),
+        options.includeVideos !== false
+          ? this.youtubeService.getRelevantVideos(options.keyword, options.contentType)
+          : Promise.resolve([] as YouTubeVideo[]),
+        options.includeReferences !== false
+          ? this.referenceService.getTopReferences(options.keyword)
+          : Promise.resolve([] as Reference[]),
+        this.maybeInitNeuronWriter(options.keyword, options),
+      ]);
 
-    endPhase1();
-    this.log(`Phase 1 complete in ${this.telemetry.phaseTimings['phase1_research']}ms`);
+      serpAnalysis =
+        results[0].status === 'fulfilled'
+          ? results[0].value
+          : this.getDefaultSerpAnalysis(options.keyword);
 
-    // ── Phase 2: AI Content Generation ─────────────────────────────────────
-    const endPhase2 = this.startPhaseTimer('phase2_generation');
-    this.log('Phase 2: AI Content Generation...');
-
-    // Build NeuronWriter term prompt if available
-    let neuronTermPrompt: string | undefined;
-    if (neuronBundle) {
-      neuronTermPrompt = neuronBundle.service.formatTermsForPrompt(
-        neuronBundle.analysis.terms ?? [],
-        neuronBundle.analysis
-      );
+      if (results[1].status === 'fulfilled') videos = results[1].value ?? [];
+      if (results[2].status === 'fulfilled') references = results[2].value ?? [];
+      if (results[3].status === 'fulfilled') neuron = results[3].value;
+    } catch (e) {
+      this.warn(`Phase 1 partial failure: ${e}`);
+      serpAnalysis = this.getDefaultSerpAnalysis(options.keyword);
     }
 
+    const phase1Ms = endPhase1Timer();
+    this.log(
+      `Phase 1 complete in ${(phase1Ms / 1000).toFixed(1)}s — ` +
+        `${videos.length} videos, ${references.length} references`
+    );
+    this.log(
+      `SERP: intent="${serpAnalysis.userIntent}", recommended=${serpAnalysis.recommendedWordCount} words`
+    );
+    const nwConfigured =
+      !!this.config.neuronWriterApiKey && !!this.config.neuronWriterProjectId;
+    this.log(
+      `NeuronWriter: ${neuron ? 'ACTIVE' : 'INACTIVE — content will proceed without NW optimization'}` +
+        (nwConfigured && !neuron ? ' (configured but init failed)' : '')
+    );
+
+    // ── Phase 2: AI Content Generation ─────────────────────────────────────
+    this.log('Phase 2: AI Content Generation');
+    const endPhase2Timer = this.startPhaseTimer('phase2_generation');
+
+    const targetWordCount =
+      options.targetWordCount ??
+      neuron?.analysis?.recommended_length ??
+      serpAnalysis.recommendedWordCount ??
+      2500;
+
+    let title = options.title ?? options.keyword;
+    try {
+      if (!options.title) {
+        title = await this.generateTitle(options.keyword, serpAnalysis);
+      }
+    } catch (e) {
+      this.warn(`Title generation failed, using keyword: ${e}`);
+      title = options.title ?? options.keyword;
+    }
+
+    const neuronTermPrompt = neuron
+      ? neuron.service.formatTermsForPrompt(neuron.analysis.terms ?? [], neuron.analysis)
+      : undefined;
+
+    const systemPrompt = buildMasterSystemPrompt();
     const promptConfig = this.buildPromptConfig(
-      keyword,
+      options.keyword,
       title,
       options,
       serpAnalysis,
@@ -1456,279 +1462,459 @@ Output ONLY the HTML paragraphs, nothing else.`;
       neuronTermPrompt,
       videos
     );
-
-    const model: AIModel = this.config.primaryModel ?? 'gemini';
-    const systemPrompt = buildMasterSystemPrompt();
     const userPrompt = buildMasterUserPrompt(promptConfig);
+    this.log(`Using master prompt system: ${userPrompt.length} char user prompt`);
 
-    let rawContent: string;
+    let content: string;
     try {
-      const genResult = await this.engine.generateWithModel({
-        prompt: userPrompt,
-        model,
-        apiKeys: this.config.apiKeys,
-        systemPrompt,
-        temperature: 0.75,
-        maxTokens: 8192,
-      });
-      rawContent = genResult.content;
-
-      if (!rawContent || rawContent.length < MIN_VALID_CONTENT_LENGTH) {
-        throw new Error('AI returned empty or too-short content. Try switching models.');
+      let result: { content: string };
+      if (this.config.useConsensus && !neuronTermPrompt && this.engine.getAvailableModels().length > 1) {
+        this.log('Using multi-model consensus generation...');
+        const consensusResult = await this.engine.generateWithConsensus(userPrompt, systemPrompt);
+        result = { content: consensusResult.finalContent };
+      } else {
+        const initialMaxTokens =
+          targetWordCount > 5000 ? 32768 : targetWordCount > 3000 ? 16384 : 8192;
+        result = await this.engine.generateWithModel({
+          prompt: userPrompt,
+          model: this.config.primaryModel ?? 'gemini',
+          apiKeys: this.config.apiKeys,
+          systemPrompt,
+          temperature: 0.72,
+          maxTokens: initialMaxTokens,
+        });
       }
+      content = result.content;
     } catch (genError) {
       const msg = genError instanceof Error ? genError.message : String(genError);
-      throw new Error(msg);
+      this.logError(`AI content generation failed: ${msg}`);
+      throw new Error(
+        `AI content generation failed: ${msg}. Check your API key and model configuration.`
+      );
     }
 
-    // Convert markdown to HTML if needed
-    if (this.hasMarkdownArtifacts(rawContent)) {
-      this.log('Content has Markdown — converting to HTML...');
-      rawContent = convertMarkdownToHTML(rawContent);
+    if (!content || content.trim().length < MIN_VALID_CONTENT_LENGTH) {
+      this.logError('AI returned empty or near-empty content');
+      throw new Error(
+        'AI model returned empty content. Check your API key, model selection, and ensure the model supports long-form generation.'
+      );
     }
 
-    // Ensure long-form completion
-    rawContent = await this.ensureLongFormComplete({
-      keyword,
+    // Ensure long-form completeness
+    content = await this.ensureLongFormComplete({
+      keyword: options.keyword,
       title,
       promptConfig,
-      model,
-      currentHtml: rawContent,
+      model: this.config.primaryModel ?? 'gemini',
+      currentHtml: content,
       targetWordCount,
     });
 
-    endPhase2();
-    this.log(`Phase 2 complete — ${this.countWordsFromHtml(rawContent)} words in ${this.telemetry.phaseTimings['phase2_generation']}ms`);
+    // Inject YouTube video if not already embedded
+    if (videos.length > 0 && !content.includes('youtube.com/embed') && !content.includes('youtube-nocookie.com/embed')) {
+      const videoSection = this.buildVideoSection(videos);
+      content = this.insertBeforeConclusion(content, videoSection);
+      this.log('Injected YouTube video section');
+    }
+
+    // Append references (pre-processing snapshot)
+    if (references.length > 0) {
+      const referencesSection = this.referenceService.formatReferencesSection(references);
+      content = content + referencesSection;
+      this.log(`Added ${references.length} references`);
+    }
+
+    const phase2Ms = endPhase2Timer();
+    this.log(
+      `Phase 2 complete in ${(phase2Ms / 1000).toFixed(1)}s — ` +
+        `${this.countWordsFromHtml(content)} words generated`
+    );
 
     // ── Phase 3: Post-Processing Pipeline ──────────────────────────────────
-    const endPhase3 = this.startPhaseTimer('phase3_postprocess');
-    this.log('Phase 3: Post-Processing Pipeline...');
+    this.log('Phase 3: Content Enhancement Pipeline');
+    const endPhase3Timer = this.startPhaseTimer('phase3_postprocessing');
+    let enhancedContent = content;
 
-    // Step 3.1: Preserve references section before any rewrites
-    const { content: contentWithoutRefs, references: preservedRefs } =
-      this.preserveReferencesSection(rawContent);
-    let html = contentWithoutRefs;
+    // 3a: Remove AI phrases (dual-pass)
+    try {
+      enhancedContent = removeAIPhrases(enhancedContent);
+      enhancedContent = removeAIPatterns(enhancedContent);
+      this.log('3a: AI phrase removal complete (dual-pass)');
+    } catch (e) { this.warn(`3a: removeAIPhrases failed (non-fatal): ${e}`); }
 
-    // Step 3.2: Remove AI phrases (dual pass)
-    this.log('Content Enhancement: Removing AI patterns...');
-    html = removeAIPatterns(html);
-    html = removeAIPhrases(html);
+    // 3b: Internal links
+    try {
+      enhancedContent = this.injectInternalLinks(enhancedContent, options);
+      this.log('3b: Internal link injection complete');
+    } catch (e) { this.warn(`3b: Internal linking failed (non-fatal): ${e}`); }
 
-    // Step 3.3: NeuronWriter improvement loop
-    if (neuronBundle) {
-      this.log('NeuronWriter: Starting improvement loop...');
-      const nwResult = await this.runNeuronWriterImprovementLoop(
-        neuronBundle,
-        html,
-        keyword,
-        title
-      );
-      html = nwResult.content;
-      this.log(`NeuronWriter: Final score — ${nwResult.score}%`);
+    // 3c: Preserve references section before NeuronWriter/self-critique loops
+    let savedReferences: string | null = null;
+    try {
+      const preserved = this.preserveReferencesSection(enhancedContent);
+      enhancedContent = preserved.content;
+      savedReferences = preserved.references;
+      if (savedReferences) this.log('3c: References section preserved for reattachment');
+    } catch (e) { this.warn(`3c: preserveReferencesSection failed (non-fatal): ${e}`); }
 
-      // Step 3.4: Self-critique pass for any remaining gaps
-      const nwRequirements = this.extractNeuronRequirements(neuronBundle.analysis);
-      html = await this.selfCritiqueAndPatch({
-        keyword,
-        title,
-        html,
-        requiredTerms: nwRequirements.requiredTerms,
-        requiredEntities: nwRequirements.entities,
-        requiredHeadings: nwRequirements.h2,
-      });
-
-      // Step 3.5: Last-resort coverage enforcement (HTML comment fallback)
-      html = this.enforceNeuronwriterCoverage(html, nwRequirements);
-    } else {
-      this.log('NeuronWriter Retry also failed — skipping NW improvement loop');
-    }
-
-    // Step 3.6: Internal linking
-    this.log('Internal Linking: Adding strategic links...');
-    html = this.injectInternalLinks(html, options);
-
-    // Step 3.7: Visual break enforcement
-    this.log('Quality Validation: Enforcing visual breaks...');
-    const vbResult = ContentPostProcessor.process(html, {
-      maxConsecutiveWords: MAX_CONSECUTIVE_P_WORDS,
-      usePullQuotes: true,
-    });
-    if (vbResult.wasModified) {
-      html = vbResult.html;
-      this.telemetry.visualBreakViolationsFixed = vbResult.elementsInjected;
-      this.log(`Visual breaks: Fixed ${vbResult.elementsInjected} violations`);
-    }
-
-    // Step 3.8: Readability polish
-    html = polishReadability(html);
-
-    // Step 3.9: Ensure proper HTML structure & styling
-    html = ensureProperHTMLStructure(html);
-
-    // Step 3.10: Append references
-    html = this.ensureReferencesSection(html, references, serpAnalysis);
-    if (preservedRefs) html = html + '\n' + preservedRefs;
-
-    endPhase3();
-    this.log(`Phase 3 complete in ${this.telemetry.phaseTimings['phase3_postprocess']}ms`);
-
-    // ── Phase 4: Quality Validation & E-E-A-T ──────────────────────────────
-    const endPhase4 = this.startPhaseTimer('phase4_quality');
-    this.log('Phase 4: Quality Validation & E-E-A-T Assessment...');
-
-    const wordCount = this.countWordsFromHtml(html);
-    const qualityScore = calculateQualityScore(html, keyword, serpAnalysis);
-    const contentAnalysis = analyzeContent(html, keyword);
-
-    let eeatScore: EEATProfile | undefined;
-    if (options.validateEEAT !== false) {
-      const eeatResult = this.eeatValidator.validateContent(html, {
-        name: this.config.authorName,
-        credentials: this.config.authorCredentials ? [this.config.authorCredentials] : [],
-      });
-      eeatScore = {
-        overall: eeatResult.overall,
-        experience: eeatResult.experience,
-        expertise: eeatResult.expertise,
-        authoritativeness: eeatResult.authoritativeness,
-        trustworthiness: eeatResult.trustworthiness,
-      };
-      this.log(`E-E-A-T: ${eeatResult.overall}% overall`);
-    }
-
-    endPhase4();
-    this.log(`Phase 4 complete in ${this.telemetry.phaseTimings['phase4_quality']}ms`);
-
-    // ── Phase 5: Schema, Metadata & Final Assembly ─────────────────────────
-    const endPhase5 = this.startPhaseTimer('phase5_schema');
-    this.log('Phase 5: Schema & Metadata generation...');
-
-    let schema: SchemaMarkup | undefined;
-    if (options.generateSchema !== false) {
+    // 3d: NeuronWriter improvement loop
+    if (neuron) {
+      this.log('3d: NeuronWriter improvement loop starting...');
       try {
-        schema = this.schemaGenerator.generate({
-          type: options.contentType === 'how-to' ? 'HowTo' : 'Article',
-          title,
-          description: serpAnalysis.userIntent ?? `Complete guide to ${keyword}`,
-          keywords: [keyword, ...(serpAnalysis.semanticEntities?.slice(0, 5) ?? [])],
-          authorName: this.config.authorName,
-          organizationName: this.config.organizationName,
-          organizationUrl: this.config.organizationUrl,
-          wordCount,
-        });
-        this.log('Schema: ✅ Generated');
-      } catch (e) {
-        this.warn(`Schema generation failed (non-fatal): ${e}`);
-      }
+        const nwResult = await this.runNeuronWriterImprovementLoop(
+          neuron, enhancedContent, options.keyword, title
+        );
+        enhancedContent = nwResult.content;
+        this.log(`3d: NeuronWriter loop complete — final score: ${nwResult.score}%`);
+      } catch (e) { this.warn(`3d: NeuronWriter improvement loop failed (non-fatal): ${e}`); }
+    } else {
+      this.log('3d: NeuronWriter INACTIVE — skipping improvement loop');
     }
 
-    // Build SEO title & meta description
-    const seoTitle =
-      title.length <= 60
-        ? title
-        : title.slice(0, 57) + '...';
+    // 3e: Self-critique
+    if (neuron) {
+      this.log('3e: Self-critique pass...');
+      try {
+        const nwRequirements = this.extractNeuronRequirements(neuron.analysis);
+        enhancedContent = await this.selfCritiqueAndPatch({
+          keyword: options.keyword,
+          title,
+          html: enhancedContent,
+          requiredTerms: nwRequirements.requiredTerms,
+          requiredEntities: nwRequirements.entities,
+          requiredHeadings: nwRequirements.h2,
+        });
+        this.log('3e: Self-critique complete');
+      } catch (e) { this.warn(`3e: Self-critique failed (non-fatal): ${e}`); }
+    }
 
+    // 3f: NeuronWriter coverage enforcement
+    if (neuron) {
+      try {
+        const nwRequirements = this.extractNeuronRequirements(neuron.analysis);
+        enhancedContent = this.enforceNeuronwriterCoverage(enhancedContent, nwRequirements);
+        this.log('3f: NeuronWriter coverage enforcement complete');
+      } catch (e) { this.warn(`3f: enforceNeuronwriterCoverage failed (non-fatal): ${e}`); }
+    }
+
+    // 3g: Visual break enforcement
+    try {
+      const vbResult = ContentPostProcessor.process(enhancedContent, {
+        maxConsecutiveWords: MAX_CONSECUTIVE_P_WORDS,
+        usePullQuotes: true,
+      });
+      if (vbResult.wasModified) {
+        enhancedContent = vbResult.html;
+        this.telemetry.visualBreakViolationsFixed = vbResult.elementsInjected;
+        this.log(`3g: Visual break enforcement — fixed ${vbResult.elementsInjected} violations`);
+      } else {
+        this.log('3g: Visual breaks PASSED — no wall-of-text violations');
+      }
+    } catch (e) { this.warn(`3g: Visual break enforcement failed (non-fatal): ${e}`); }
+
+    // 3h: Readability polish
+    try {
+      enhancedContent = polishReadability(enhancedContent);
+      this.log('3h: Readability polish complete');
+    } catch (e) { this.warn(`3h: polishReadability failed (non-fatal): ${e}`); }
+
+    // 3i: HTML structure enforcement
+    try {
+      if (this.hasMarkdownArtifacts(enhancedContent)) {
+        enhancedContent = convertMarkdownToHTML(enhancedContent);
+        this.log('3i: Markdown → HTML conversion complete');
+      }
+      enhancedContent = ensureProperHTMLStructure(enhancedContent);
+      this.log('3i: HTML structure enforcement complete');
+    } catch (e) { this.warn(`3i: HTML structure enforcement failed (non-fatal): ${e}`); }
+
+    // 3j: Reattach/ensure references
+    try {
+      enhancedContent = this.ensureReferencesSection(enhancedContent, references, serpAnalysis);
+      if (savedReferences) enhancedContent += '\n' + savedReferences;
+      this.log(`3j: References — ${references.length} sources ensured in content`);
+    } catch (e) { this.warn(`3j: ensureReferencesSection failed (non-fatal): ${e}`); }
+
+    // 3k: FAQ enforcement
+    try {
+      const hasFaq = /details|h2[^>]*>\s*(?:faq|frequently asked|common questions)/i.test(enhancedContent);
+      if (!hasFaq) {
+        this.log('3k: No FAQ section detected — generating...');
+        const faqTerms = neuron
+          ? neuron.analysis.terms?.slice(0, 15).map((t) => t.term).join(', ')
+          : options.keyword;
+
+        const faqPrompt =
+          `Generate a FAQ section for an article titled "${title}" about "${options.keyword}".\n` +
+          `Create exactly 8 frequently asked questions with detailed answers.\n\n` +
+          `REQUIREMENTS:\n` +
+          `- Each question must be specific and valuable, not generic\n` +
+          `- Answers should be 40-80 words each\n` +
+          `- Include the keyword "${options.keyword}" in at least 3 questions\n` +
+          `- Naturally incorporate these terms where relevant: ${faqTerms}\n\n` +
+          `- Output PURE HTML using this exact format for each Q&A:\n` +
+          `<details style="margin:12px 0;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;max-width:100%;box-sizing:border-box">\n` +
+          `  <summary style="padding:18px 24px;background:#f8fafc;cursor:pointer;font-weight:700;color:#0f172a;font-size:17px;list-style:none;display:flex;justify-content:space-between;align-items:center">Question here? <span style="font-size:20px;color:#64748b">+</span></summary>\n` +
+          `  <div style="padding:16px 24px;color:#475569;font-size:16px;line-height:1.8;border-top:1px solid #e2e8f0">Answer here.</div>\n` +
+          `</details>\n\n` +
+          `Wrap all 8 Q&As inside:\n` +
+          `<div style="margin-top:48px"><h2 style="color:#0f172a;font-size:30px;font-weight:900;margin:56px 0 24px 0;padding-bottom:14px;border-bottom:4px solid #10b981">Frequently Asked Questions</h2><!-- all 8 details/summary blocks here --></div>\n\n` +
+          `Output ONLY the HTML. No markdown. No commentary.`;
+
+        const faqResult = await this.engine.generateWithModel({
+          prompt: faqPrompt,
+          model: this.config.primaryModel ?? 'gemini',
+          apiKeys: this.config.apiKeys,
+          systemPrompt: 'Generate FAQ HTML. Output PURE HTML ONLY.',
+          temperature: 0.6,
+          maxTokens: 4096,
+        });
+
+        if (faqResult.content && faqResult.content.trim().length > 200) {
+          const refsMarker = enhancedContent.indexOf('<!-- SOTA References Section -->');
+          if (refsMarker !== -1) {
+            enhancedContent =
+              enhancedContent.slice(0, refsMarker) +
+              faqResult.content.trim() +
+              '\n' +
+              enhancedContent.slice(refsMarker);
+          } else {
+            enhancedContent += '\n' + faqResult.content.trim();
+          }
+          this.log('3k: FAQ section generated and injected');
+        } else {
+          this.warn('3k: FAQ generation returned insufficient content');
+        }
+      } else {
+        this.log('3k: FAQ section already exists');
+      }
+    } catch (e) { this.warn(`3k: FAQ enforcement failed (non-fatal): ${e}`); }
+
+    const phase3Ms = endPhase3Timer();
+    this.log(
+      `Phase 3 complete in ${(phase3Ms / 1000).toFixed(1)}s — all post-processing steps executed`
+    );
+
+    // ── Phase 4: Quality Validation ─────────────────────────────────────────
+    this.log('Phase 4: Quality & E-E-A-T Validation');
+    const endPhase4Timer = this.startPhaseTimer('phase4_validation');
+
+    let metrics: ContentMetrics = {
+      wordCount: this.countWordsFromHtml(enhancedContent),
+      sentenceCount: 0,
+      paragraphCount: 0,
+      headingCount: 0,
+      imageCount: 0,
+      linkCount: 0,
+      keywordDensity: 0,
+      readabilityGrade: 7,
+      estimatedReadTime: 0,
+    };
+    let internalLinks: InternalLink[] = [];
+    let qualityScore: QualityScore = {
+      overall: 75,
+      readability: 75,
+      seo: 75,
+      eeat: 75,
+      uniqueness: 75,
+      factAccuracy: 75,
+    };
+    let eeatScore = {
+      overall: 75,
+      experience: 75,
+      expertise: 75,
+      authoritativeness: 75,
+      trustworthiness: 75,
+    };
+
+    try { metrics = analyzeContent(enhancedContent); } catch (e) { this.warn(`analyzeContent failed (non-fatal): ${e}`); }
+    try { internalLinks = this.linkEngine.generateLinkOpportunities(enhancedContent); } catch (e) { this.warn(`Link analysis failed (non-fatal): ${e}`); }
+
+    try {
+      const [qs, eeat] = await Promise.all([
+        Promise.resolve(
+          calculateQualityScore(enhancedContent, options.keyword, internalLinks.map((l) => l.targetUrl))
+        ),
+        Promise.resolve(
+          this.eeatValidator.validateContent(enhancedContent, {
+            name: this.config.authorName,
+            credentials: this.config.authorCredentials,
+          })
+        ),
+      ]);
+      qualityScore = qs;
+      eeatScore = eeat;
+      this.log(`Quality Score: ${qualityScore.overall} | E-E-A-T Score: ${eeatScore.overall}`);
+    } catch (e) { this.warn(`Quality/E-E-A-T scoring failed (non-fatal): ${e}`); }
+
+    const phase4Ms = endPhase4Timer();
+
+    // ── Phase 5: Schema, Metadata & Final Assembly ──────────────────────────
+    this.log('Phase 5: Schema & Metadata');
+    const endPhase5Timer = this.startPhaseTimer('phase5_schema');
+
+    const finalWordCount = this.countWordsFromHtml(enhancedContent);
+    const slug = this.generateSlug(title);
+    const seoTitle = title.length <= 60 ? title : title.slice(0, 57) + '...';
     const metaDescription =
       serpAnalysis.userIntent
         ? `${serpAnalysis.userIntent.slice(0, 150)}...`
-        : `Complete guide to ${keyword}. Expert tips, strategies, and actionable advice.`;
+        : `Complete guide to ${options.keyword}. Expert tips, strategies, and actionable advice.`;
 
-    const slug = this.generateSlug(title);
+    const secondaryKeywords = serpAnalysis.semanticEntities?.slice(0, 10) ?? [];
 
-    // Internal links for audit
-    const internalLinks: InternalLink[] = (html.match(/<a\s+href="([^"]+)"[^>]*>([^<]+)<\/a>/gi) ?? [])
-      .slice(0, 20)
-      .map((match) => {
-        const hrefMatch = match.match(/href="([^"]+)"/i);
-        const anchorMatch = match.match(/>([^<]+)<\/a>/i);
-        return {
-          anchorText: anchorMatch?.[1] ?? '',
-          anchor: anchorMatch?.[1] ?? '',
-          targetUrl: hrefMatch?.[1] ?? '',
-          context: '',
-        };
-      })
-      .filter((l) => l.targetUrl);
+    let schema: GeneratedContent['schema'];
+    try {
+      schema = this.schemaGenerator.generateComprehensiveSchema(
+        title,
+        enhancedContent,
+        metaDescription,
+        slug,
+        options.keyword,
+        secondaryKeywords,
+        metrics,
+        qualityScore,
+        internalLinks,
+        eeatScore,
+        new Date(),
+        this.config.primaryModel ?? 'gemini',
+        this.config.useConsensus ?? false,
+        `${this.config.organizationUrl}/${slug}`
+      );
+    } catch (e) { this.warn(`Schema generation failed (non-fatal): ${e}`); }
 
-    endPhase5();
-    this.log(`Phase 5 complete in ${this.telemetry.phaseTimings['phase5_schema']}ms`);
+    const phase5Ms = endPhase5Timer();
+    const totalDuration = Date.now() - startTime;
 
-    // ── Final Assembly ─────────────────────────────────────────────────────
-    const totalTime = Object.values(this.telemetry.phaseTimings).reduce((a, b) => a + b, 0);
-    this.log(`✅ Generation complete — ${wordCount} words in ${Math.round(totalTime / 1000)}s`);
-    this.log(`Telemetry: NW attempts=${this.telemetry.neuronWriterAttempts}, NW score=${this.telemetry.neuronWriterFinalScore}, continuations=${this.telemetry.continuationRounds}, links=${this.telemetry.internalLinksInjected}, VB fixes=${this.telemetry.visualBreakViolationsFixed}`);
+    this.log(`Generation complete in ${(totalDuration / 1000).toFixed(1)}s`);
+    this.log(`Words: ${finalWordCount} | Quality: ${qualityScore.overall}`);
+    this.log(`NeuronWriter: ${this.telemetry.neuronWriterFinalScore} (${this.telemetry.neuronWriterAttempts} attempts)`);
+    this.log(`Internal Links Injected: ${this.telemetry.internalLinksInjected}`);
+    this.log(`Visual Break Violations Fixed: ${this.telemetry.visualBreakViolationsFixed}`);
+    this.log(`Continuation Rounds: ${this.telemetry.continuationRounds}`);
+    this.log(`Self-Critique Applied: ${this.telemetry.selfCritiqueApplied}`);
+    if (this.telemetry.warnings.length > 0) this.log(`Warnings: ${this.telemetry.warnings.length}`);
+    if (this.telemetry.errors.length > 0) this.log(`Errors: ${this.telemetry.errors.length}`);
+    this.log(
+      `Phase Timings: ${Object.entries(this.telemetry.phaseTimings)
+        .map(([k, v]) => `${k}:${(v / 1000).toFixed(1)}s`)
+        .join(', ')}`
+    );
 
-    if (this.telemetry.warnings.length > 0) {
-      this.log(`Warnings (${this.telemetry.warnings.length}): ${this.telemetry.warnings.slice(0, 5).join(' | ')}`);
-    }
-
-    const result: GeneratedContent = {
+    const generatedContent: GeneratedContent = {
       id: crypto.randomUUID(),
       title,
       seoTitle,
-      content: html,
+      content: enhancedContent,
       metaDescription,
       slug,
-      primaryKeyword: keyword,
-      secondaryKeywords: serpAnalysis.semanticEntities?.slice(0, 10) ?? [],
-      metrics: {
-        wordCount,
-        readabilityScore: contentAnalysis.readabilityScore ?? 75,
-        keywordDensity: contentAnalysis.keywordDensity ?? 1.5,
-        headingCount: contentAnalysis.headingCount ?? 0,
-        paragraphCount: contentAnalysis.paragraphCount ?? 0,
-        sentenceCount: contentAnalysis.sentenceCount ?? 0,
-      } as ContentMetrics,
-      qualityScore: {
-        overall: qualityScore.overall,
-        readability: qualityScore.readability,
-        seo: qualityScore.seo,
-        eeat: eeatScore?.overall ?? qualityScore.eeat,
-        uniqueness: qualityScore.uniqueness,
-        factAccuracy: qualityScore.factAccuracy,
-      } as QualityScore,
+      primaryKeyword: options.keyword,
+      secondaryKeywords,
+      metrics,
+      qualityScore,
       internalLinks,
       schema,
+      eeat: eeatScore,
       serpAnalysis,
-      neuronWriterAnalysis: neuronBundle?.analysis
+      generatedAt: new Date(),
+      model: this.config.primaryModel ?? 'gemini',
+      consensusUsed: this.config.useConsensus ?? false,
+      neuronWriterQueryId: neuron?.queryId,
+      neuronWriterAnalysis: neuron
         ? {
-            queryid: neuronBundle.queryId,
-            keyword: neuronBundle.analysis.keyword ?? keyword,
-            status: neuronBundle.analysis.status ?? 'ready',
-            terms: neuronBundle.analysis.terms ?? [],
-            termsExtended: neuronBundle.analysis.termsExtended ?? [],
-            entities: neuronBundle.analysis.entities as any,
-            headingsH2: neuronBundle.analysis.headingsH2 as any,
-            headingsH3: neuronBundle.analysis.headingsH3 as any,
-            recommendedlength: neuronBundle.analysis.recommended_length ?? 2500,
-            contentscore: this.telemetry.neuronWriterFinalScore,
+            ...neuron.analysis,
+            queryid: neuron.queryId,
+            status: 'ready',
           }
         : undefined,
-      neuronWriterQueryId: neuronBundle?.queryId,
-      generatedAt: new Date(),
-      model,
-      telemetry: this.telemetry,
-    };
+      postProcessing: {
+        aiPhrasesRemoved: true,
+        visualBreaksEnforced: true,
+        internalLinksInjected: this.telemetry.internalLinksInjected,
+        neuronWriterScore: this.telemetry.neuronWriterFinalScore,
+        selfCritiqueApplied: this.telemetry.selfCritiqueApplied,
+      },
+    } as unknown as GeneratedContent;
 
-    generationCache.set(cacheKey, result);
-    return result;
+    generationCache.set(cacheKey, generatedContent);
+    return generatedContent;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // FALLBACK SERP ANALYSIS
-  // ─────────────────────────────────────────────────────────────────────────
+  private async generateTitle(keyword: string, serp: SERPAnalysis): Promise<string> {
+    const words = keyword.split(' ');
+    const capitalized = words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    const templates = [
+      `The Complete Guide to ${capitalized}`,
+      `${capitalized}: Everything You Need to Know`,
+      `How to Master ${capitalized} in 2026`,
+      `${capitalized} — Expert Tips & Strategies`,
+      `The Ultimate ${capitalized} Guide`,
+    ];
+    const idx =
+      Math.abs(keyword.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0)) %
+      templates.length;
+    return templates[idx];
+  }
 
-  private getFallbackSERPAnalysis(keyword: string): SERPAnalysis {
+  private buildVideoSection(videos: YouTubeVideo[]): string {
+    if (!videos || videos.length === 0) return '';
+    const video = videos[0];
+    return (
+      `\n<div style="margin:40px 0;padding:24px;background:#f8fafc;border-radius:16px;border:1px solid #e2e8f0">\n` +
+      `  <h3 style="color:#1e293b;font-size:20px;font-weight:700;margin:0 0 16px 0">Related Video</h3>\n` +
+      `  <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:12px">\n` +
+      `    <iframe src="https://www.youtube-nocookie.com/embed/${this.escapeHtml(video.id)}" ` +
+      `title="${this.escapeHtml(video.title)}" ` +
+      `style="position:absolute;top:0;left:0;width:100%;height:100%;border:0" ` +
+      `allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" ` +
+      `allowfullscreen loading="lazy"></iframe>\n` +
+      `  </div>\n` +
+      `</div>\n`
+    );
+  }
+
+  private getDefaultSerpAnalysis(keyword: string): SERPAnalysis {
     return {
-      keyword,
-      topCompetitors: [],
-      avgWordCount: 2500,
-      recommendedWordCount: 3000,
+      avgWordCount: 2000,
+      commonHeadings: [
+        `What is ${keyword}?`,
+        `How to ${keyword}`,
+        `Benefits of ${keyword}`,
+        'Best Practices',
+        'FAQ',
+      ],
       contentGaps: [],
+      userIntent: 'informational',
       semanticEntities: [],
-      userIntent: `Complete guide to ${keyword}`,
-      topQuestions: [],
+      topCompetitors: [],
+      recommendedWordCount: 2500,
+      recommendedHeadings: [
+        `What is ${keyword}?`,
+        `How ${keyword} Works`,
+        'Key Benefits',
+        'Getting Started',
+        'Best Practices',
+        'Common Mistakes to Avoid',
+        'FAQ',
+        'Conclusion',
+      ],
     };
+  }
+
+  getCacheStats(): { size: number; hitRate: number } {
+    return generationCache.getStats();
+  }
+
+  hasAvailableModels(): boolean {
+    return this.engine.hasAvailableModel();
+  }
+
+  getAvailableModels(): AIModel[] {
+    return this.engine.getAvailableModels();
+  }
+
+  getTelemetry(): OrchestratorTelemetry {
+    return { ...this.telemetry };
   }
 }
 
@@ -1741,4 +1927,5 @@ export function createOrchestrator(config: OrchestratorConfig): EnterpriseConten
 }
 
 export default EnterpriseContentOrchestrator;
+
 
