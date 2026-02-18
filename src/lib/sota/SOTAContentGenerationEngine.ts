@@ -1,5 +1,19 @@
-// SOTA CONTENT GENERATION ENGINE v2.1 - Multi-Model AI Processing
-// Fixed: Cache type mismatch, added retry logic, improved error handling
+// src/lib/sota/SOTAContentGenerationEngine.ts
+// ═══════════════════════════════════════════════════════════════════════════════
+// SOTA CONTENT GENERATION ENGINE v2.2 — Multi-Model AI Processing
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// v2.2 Fixes:
+//   • FIXED: Cache key uses full-prompt hash instead of truncation to 200 chars.
+//     Previously, two different 10,000-char prompts sharing the same first 200
+//     characters would collide, returning stale/wrong cached content.
+//
+// v2.1 Fixes:
+//   • FIXED: Cache type mismatch
+//   • Added retry logic for transient API errors (429, 500, 503)
+//   • Improved error handling
+//
+// ═══════════════════════════════════════════════════════════════════════════════
 
 import type {
   AIModel,
@@ -10,7 +24,10 @@ import type {
 } from './types';
 import { generationCache } from './cache';
 
+// ─────────────────────────────────────────────────────────────────────────────
 // Model configurations with dynamic model ID support
+// ─────────────────────────────────────────────────────────────────────────────
+
 interface ModelConfig {
   endpoint: string;
   modelId: string;
@@ -60,6 +77,34 @@ export interface ExtendedAPIKeys extends APIKeys {
 /** Maximum retries for transient API errors (429, 500, 503) */
 const MAX_RETRIES = 2;
 const RETRYABLE_STATUS_CODES = [429, 500, 502, 503, 504];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ✅ FIX #6: Deterministic hash for cache keys
+//
+// The previous approach truncated the prompt to 200 chars, causing collisions
+// for long-form generation prompts that share a common preamble (e.g. the
+// master system prompt prefix). This simple hash produces a unique-enough key
+// for cache lookup without needing a crypto import.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function simpleHash(str: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN ENGINE CLASS
+// ─────────────────────────────────────────────────────────────────────────────
 
 export class SOTAContentGenerationEngine {
   private apiKeys: ExtendedAPIKeys;
@@ -134,8 +179,10 @@ export class SOTAContentGenerationEngine {
       throw new Error(`No API key configured for ${model}`);
     }
 
-    // Check cache — stores GenerationResult directly (not Promise)
-    const cacheKey = { prompt: prompt.slice(0, 200), model, systemPrompt: (systemPrompt || '').slice(0, 100) };
+    // ✅ FIX #6: Use full-content hash for cache key instead of 200-char truncation.
+    //    Old code:  { prompt: prompt.slice(0, 200), model, systemPrompt: (systemPrompt || '').slice(0, 100) }
+    //    This caused collisions for prompts sharing a common preamble.
+    const cacheKey = `${model}:${simpleHash(prompt)}:${simpleHash(systemPrompt || '')}`;
     const cached = generationCache.get<GenerationResult>(cacheKey);
     if (cached) {
       generationCache.recordHit();
@@ -206,6 +253,10 @@ export class SOTAContentGenerationEngine {
     this.log(`Error with ${model} after ${MAX_RETRIES + 1} attempts: ${lastError}`);
     throw lastError;
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // MODEL-SPECIFIC CALLERS
+  // ─────────────────────────────────────────────────────────────────────────
 
   private async callGemini(
     apiKey: string,
@@ -349,6 +400,10 @@ export class SOTAContentGenerationEngine {
     };
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // CONSENSUS GENERATION
+  // ─────────────────────────────────────────────────────────────────────────
+
   async generateWithConsensus(
     prompt: string,
     systemPrompt?: string,
@@ -447,6 +502,10 @@ Synthesize into ONE perfect piece. Output ONLY the final content, no explanation
     return result.content;
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // PUBLIC HELPERS
+  // ─────────────────────────────────────────────────────────────────────────
+
   getAvailableModels(): AIModel[] {
     const models: AIModel[] = ['gemini', 'openai', 'anthropic', 'openrouter', 'groq'];
     return models.filter(model => this.getApiKey(model));
@@ -457,7 +516,10 @@ Synthesize into ONE perfect piece. Output ONLY the final content, no explanation
   }
 }
 
-// Factory function
+// ─────────────────────────────────────────────────────────────────────────────
+// FACTORY
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function createSOTAEngine(
   apiKeys: APIKeys,
   onProgress?: (message: string) => void,
