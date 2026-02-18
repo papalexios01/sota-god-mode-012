@@ -53,6 +53,12 @@ export function SetupConfig() {
   const [showCustomGroq, setShowCustomGroq] = useState(false);
   const [nwFetchAttempted, setNwFetchAttempted] = useState(false);
 
+  // Fallback model add form
+  const [fbProvider, setFbProvider] = useState<string>('openrouter');
+  const [fbModelId, setFbModelId] = useState<string>('');
+  const [fbCustomModelId, setFbCustomModelId] = useState<string>('');
+  const [fbShowCustom, setFbShowCustom] = useState(false);
+
   const [sbUrl, setSbUrl] = useState(config.supabaseUrl || '');
   const [sbAnonKey, setSbAnonKey] = useState(config.supabaseAnonKey || '');
   const sbStatus = validateSupabaseConfig(sbUrl.trim(), sbAnonKey.trim());
@@ -310,62 +316,147 @@ export function SetupConfig() {
           )}
 
           {/* Fallback Models */}
-          <div className="p-4 bg-background/50 border border-border rounded-xl space-y-3">
-            <label className="block text-sm font-medium text-foreground">Fallback Models (tried in order if primary fails)</label>
-            <p className="text-xs text-muted-foreground">Select backup models to try automatically when the primary fails. Models without an API key are dimmed — add the key above to enable them.</p>
-            <div className="flex flex-wrap gap-2 mt-2">
-              {[
-                { key: 'gemini', label: 'Gemini', hasKey: !!config.geminiApiKey },
-                { key: 'openai', label: 'OpenAI', hasKey: !!config.openaiApiKey },
-                { key: 'anthropic', label: 'Anthropic', hasKey: !!config.anthropicApiKey },
-                { key: 'openrouter', label: 'OpenRouter', hasKey: !!config.openrouterApiKey },
-                { key: 'groq', label: 'Groq', hasKey: !!config.groqApiKey },
-              ]
-                .filter(m => m.key !== config.primaryModel)
-                .map(m => {
-                  const isSelected = (config.fallbackModels || []).includes(m.key);
-                  const currentFallbacks = config.fallbackModels || [];
+          <div className="p-4 bg-background/50 border border-border rounded-xl space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-foreground">Fallback Models</label>
+              <p className="text-xs text-muted-foreground mt-1">Add backup models tried in order when the primary fails. You can add multiple models from the same provider (e.g., several OpenRouter models).</p>
+            </div>
+
+            {/* Current fallback list */}
+            {(config.fallbackModels || []).length > 0 && (
+              <div className="space-y-2">
+                {(config.fallbackModels || []).map((entry, idx) => {
+                  const colonIdx = entry.indexOf(':');
+                  const provider = colonIdx > 0 ? entry.substring(0, colonIdx) : entry;
+                  const modelId = colonIdx > 0 ? entry.substring(colonIdx + 1) : '(default)';
                   return (
-                    <button
-                      key={m.key}
-                      onClick={() => {
-                        if (isSelected) {
-                          setConfig({ fallbackModels: currentFallbacks.filter(f => f !== m.key) });
-                        } else {
-                          setConfig({ fallbackModels: [...currentFallbacks, m.key] });
-                        }
-                      }}
-                      title={m.hasKey ? `Click to ${isSelected ? 'remove' : 'add'} ${m.label} as fallback` : `⚠️ No API key set for ${m.label} — add it in the API Keys section above`}
-                      className={cn(
-                        "px-3 py-1.5 rounded-lg text-sm font-medium transition-all border",
-                        isSelected
-                          ? "bg-primary/20 border-primary/50 text-primary"
-                          : m.hasKey
-                            ? "bg-background/30 border-border/50 text-muted-foreground hover:border-border"
-                            : "bg-background/10 border-border/20 text-muted-foreground/50 hover:border-border/40"
-                      )}
-                    >
-                      {isSelected ? <Check className="w-3 h-3 inline mr-1" /> : null}
-                      {!m.hasKey ? <AlertCircle className="w-3 h-3 inline mr-1 text-amber-500/70" /> : null}
-                      {m.label}
-                    </button>
+                    <div key={`${entry}-${idx}`} className="flex items-center gap-2 px-3 py-2 bg-background/30 border border-border/40 rounded-lg">
+                      <span className="text-xs font-mono text-primary/80 w-5 text-center">{idx + 1}</span>
+                      <span className="text-xs font-semibold text-foreground uppercase">{provider}</span>
+                      <span className="text-xs text-muted-foreground">→</span>
+                      <span className="text-xs text-foreground flex-1 font-mono">{modelId}</span>
+                      <button
+                        onClick={() => {
+                          const updated = [...(config.fallbackModels || [])];
+                          if (idx > 0) { [updated[idx - 1], updated[idx]] = [updated[idx], updated[idx - 1]]; setConfig({ fallbackModels: updated }); }
+                        }}
+                        disabled={idx === 0}
+                        className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors"
+                        title="Move up"
+                      >↑</button>
+                      <button
+                        onClick={() => {
+                          const updated = [...(config.fallbackModels || [])];
+                          if (idx < updated.length - 1) { [updated[idx], updated[idx + 1]] = [updated[idx + 1], updated[idx]]; setConfig({ fallbackModels: updated }); }
+                        }}
+                        disabled={idx === (config.fallbackModels || []).length - 1}
+                        className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors"
+                        title="Move down"
+                      >↓</button>
+                      <button
+                        onClick={() => setConfig({ fallbackModels: (config.fallbackModels || []).filter((_, i) => i !== idx) })}
+                        className="text-xs text-red-400/70 hover:text-red-400 transition-colors"
+                        title="Remove"
+                      >
+                        <XCircle className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   );
                 })}
-            </div>
-            {(config.fallbackModels || []).length > 0 && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Fallback order: {(config.fallbackModels || []).map((f, i) => <span key={f}>{i > 0 ? ' → ' : ''}<code className="text-primary">{f}</code></span>)}
-              </p>
+              </div>
             )}
-            {(config.fallbackModels || []).some(f => {
-              const keyMap: Record<string, string> = { gemini: 'geminiApiKey', openai: 'openaiApiKey', anthropic: 'anthropicApiKey', openrouter: 'openrouterApiKey', groq: 'groqApiKey' };
-              return !(config as any)[keyMap[f]];
-            }) && (
-                <p className="text-xs text-amber-400 flex items-center gap-1 mt-1">
-                  <AlertCircle className="w-3 h-3" />
-                  Some selected fallback models don't have API keys yet — they'll be skipped at runtime until you add them.
-                </p>
+
+            {/* Add new fallback */}
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="flex-shrink-0">
+                <label className="block text-xs text-muted-foreground mb-1">Provider</label>
+                <select
+                  value={fbProvider}
+                  onChange={(e) => { setFbProvider(e.target.value); setFbModelId(''); setFbShowCustom(false); }}
+                  className="px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                >
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="groq">Groq</option>
+                </select>
+              </div>
+
+              <div className="flex-1 min-w-[200px]">
+                <label className="block text-xs text-muted-foreground mb-1">Model ID</label>
+                {fbProvider === 'openrouter' && !fbShowCustom ? (
+                  <select
+                    value={fbModelId}
+                    onChange={(e) => { if (e.target.value === '__custom__') { setFbShowCustom(true); setFbModelId(''); } else { setFbModelId(e.target.value); } }}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  >
+                    <option value="">Select model...</option>
+                    {OPENROUTER_MODELS.map(m => <option key={m.id} value={m.id}>{m.name} ({m.id})</option>)}
+                    <option value="__custom__">Custom model ID...</option>
+                  </select>
+                ) : fbProvider === 'groq' && !fbShowCustom ? (
+                  <select
+                    value={fbModelId}
+                    onChange={(e) => { if (e.target.value === '__custom__') { setFbShowCustom(true); setFbModelId(''); } else { setFbModelId(e.target.value); } }}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  >
+                    <option value="">Select model...</option>
+                    {GROQ_MODELS.map(m => <option key={m.id} value={m.id}>{m.name} ({m.id})</option>)}
+                    <option value="__custom__">Custom model ID...</option>
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={fbShowCustom ? fbCustomModelId : fbModelId}
+                    onChange={(e) => fbShowCustom ? setFbCustomModelId(e.target.value) : setFbModelId(e.target.value)}
+                    placeholder={fbProvider === 'openrouter' ? 'e.g., anthropic/claude-3.5-sonnet:beta' : fbProvider === 'gemini' ? 'e.g., gemini-2.5-flash' : 'Enter model ID...'}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  />
+                )}
+              </div>
+
+              <button
+                onClick={() => {
+                  const modelId = fbShowCustom ? fbCustomModelId.trim() : fbModelId.trim();
+                  if (!modelId) return;
+                  const entry = `${fbProvider}:${modelId}`;
+                  if ((config.fallbackModels || []).includes(entry)) {
+                    toast.error('This fallback model is already added.');
+                    return;
+                  }
+                  setConfig({ fallbackModels: [...(config.fallbackModels || []), entry] });
+                  setFbModelId('');
+                  setFbCustomModelId('');
+                  setFbShowCustom(false);
+                  toast.success(`Added ${fbProvider}:${modelId} as fallback #${(config.fallbackModels || []).length + 1}`);
+                }}
+                disabled={!(fbShowCustom ? fbCustomModelId.trim() : fbModelId.trim())}
+                className={cn(
+                  "px-4 py-2 rounded-lg text-sm font-semibold transition-all border",
+                  (fbShowCustom ? fbCustomModelId.trim() : fbModelId.trim())
+                    ? "bg-primary text-primary-foreground border-primary hover:bg-primary/90"
+                    : "bg-muted text-muted-foreground border-border cursor-not-allowed"
+                )}
+              >
+                Add
+              </button>
+
+              {(config.fallbackModels || []).length > 0 && (
+                <button
+                  onClick={() => { setConfig({ fallbackModels: [] }); toast.success('All fallback models cleared.'); }}
+                  className="px-3 py-2 rounded-lg text-sm font-medium border border-border/50 text-red-400/70 hover:text-red-400 hover:border-red-400/30 transition-all"
+                >
+                  Clear All
+                </button>
               )}
+            </div>
+
+            {fbShowCustom && (
+              <button onClick={() => { setFbShowCustom(false); setFbCustomModelId(''); }} className="text-xs text-primary hover:underline">
+                ← Back to preset list
+              </button>
+            )}
           </div>
 
           <label className="flex items-center gap-3 cursor-pointer">

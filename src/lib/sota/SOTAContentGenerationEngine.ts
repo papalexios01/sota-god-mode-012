@@ -254,31 +254,61 @@ export class SOTAContentGenerationEngine {
 
     this.log(`Error with ${model} after ${MAX_RETRIES + 1} attempts: ${lastError}`);
 
-    // ✅ FALLBACK MODELS: If primary fails, try fallback models in order
+    // ✅ FALLBACK MODELS: If primary fails, try fallback models in order.
+    //    Each entry is "provider:modelId" (e.g. "openrouter:anthropic/claude-3.5-sonnet")
+    //    or just "provider" (e.g. "gemini") to use the default model for that provider.
     const fallbackModels = (this.apiKeys.fallbackModels || []) as string[];
     if (fallbackModels.length > 0) {
-      for (const fallbackKey of fallbackModels) {
-        const fallbackModel = fallbackKey as AIModel;
-        if (fallbackModel === model) continue; // Skip the model that just failed
-        const fallbackApiKey = this.getApiKey(fallbackModel);
+      for (const fallbackEntry of fallbackModels) {
+        // Parse "provider:modelId" or just "provider"
+        const colonIdx = fallbackEntry.indexOf(':');
+        const fallbackProvider = (colonIdx > 0 ? fallbackEntry.substring(0, colonIdx) : fallbackEntry) as AIModel;
+        const fallbackModelId = colonIdx > 0 ? fallbackEntry.substring(colonIdx + 1) : undefined;
+
+        // Skip if this is the exact same provider+model that just failed
+        if (fallbackProvider === model && !fallbackModelId) continue;
+
+        const fallbackApiKey = this.getApiKey(fallbackProvider);
         if (!fallbackApiKey) {
-          this.log(`Fallback ${fallbackModel}: no API key configured, skipping`);
+          this.log(`Fallback ${fallbackEntry}: no API key for ${fallbackProvider}, skipping`);
           continue;
         }
-        this.log(`🔄 Trying fallback model: ${fallbackModel}...`);
+
+        // Temporarily override model config if a specific modelId is provided
+        const originalConfig = this.modelConfigs[fallbackProvider];
+        if (fallbackModelId) {
+          this.modelConfigs[fallbackProvider] = {
+            ...originalConfig,
+            modelId: fallbackModelId,
+          };
+        }
+
+        const displayName = fallbackModelId
+          ? `${fallbackProvider}/${fallbackModelId}`
+          : fallbackProvider;
+
+        this.log(`🔄 Trying fallback: ${displayName}...`);
         try {
           const fallbackResult = await this.generateWithModel({
             ...params,
-            model: fallbackModel,
+            model: fallbackProvider,
           });
-          this.log(`✅ Fallback model ${fallbackModel} succeeded!`);
+          this.log(`✅ Fallback ${displayName} succeeded!`);
+          // Restore original config
+          if (fallbackModelId) {
+            this.modelConfigs[fallbackProvider] = originalConfig;
+          }
           return fallbackResult;
         } catch (fallbackErr) {
-          this.log(`❌ Fallback ${fallbackModel} also failed: ${fallbackErr}`);
+          this.log(`❌ Fallback ${displayName} failed: ${fallbackErr}`);
+          // Restore original config before trying next
+          if (fallbackModelId) {
+            this.modelConfigs[fallbackProvider] = originalConfig;
+          }
           continue;
         }
       }
-      this.log(`All fallback models exhausted. No generation possible.`);
+      this.log(`All ${fallbackModels.length} fallback models exhausted. No generation possible.`);
     }
 
     throw lastError;

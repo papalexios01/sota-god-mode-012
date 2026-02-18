@@ -121,7 +121,7 @@ export interface AppConfig {
   neuronWriterApiKey: string;
   neuronWriterProjectId: string;
   neuronWriterProjectName: string;
-  fallbackModels: string[]; // Ordered list of fallback model keys tried if primary fails
+  fallbackModels: string[]; // Ordered list: "provider:modelId" e.g. "openrouter:anthropic/claude-3.5-sonnet"
   enableGeoTargeting: boolean;
   targetCountry: string;
   targetLanguage: string;
