@@ -521,102 +521,104 @@ export class EnterpriseContentOrchestrator {
 ): Promise<NeuronBundle | null> {
   const apiKey = this.config.neuronWriterApiKey?.trim();
   const projectId = this.config.neuronWriterProjectId?.trim();
-  if (!apiKey || !projectId) return null;
+
+  if (!apiKey || !projectId) {
+    this.log(
+      'NeuronWriter SKIPPED — ' +
+        (!apiKey ? 'API key MISSING' : 'Project ID MISSING')
+    );
+    return null;
+  }
 
   const service = createNeuronWriterService(apiKey);
   const nwKeyword = NeuronWriterService.cleanKeyword(keyword);
-
   this.log('NeuronWriter: keyword="' + nwKeyword + '" (raw: "' + keyword + '")');
 
-  // ── Step 1: Check if provided query ID is valid ──────────────────────────
   let queryId = options.neuronWriterQueryId?.trim() || '';
 
-  // ── Step 2: Search for existing query — ALL statuses ────────────────────
+  // ── Step 1: Search ALL statuses ──────────────────────────────────────────
   if (!queryId) {
-    const searchResult = await service.findQueryByKeyword(projectId, nwKeyword);
-    if (searchResult.success && searchResult.query) {
-      queryId = searchResult.query.id;
-      this.log('NeuronWriter: Reusing existing query ID=' + queryId + ' status=' + searchResult.query.status);
+    try {
+      const searchResult = await service.findQueryByKeyword(projectId, nwKeyword);
+      if (searchResult.success && searchResult.query?.id) {
+        queryId = searchResult.query.id;
+        this.log(
+          'NeuronWriter: Found existing query ID=' + queryId +
+            ' status=' + (searchResult.query.status || 'unknown')
+        );
+      }
+    } catch (e) {
+      this.warn('NeuronWriter: findQueryByKeyword threw (non-fatal): ' + e);
     }
   }
 
-  // ── Step 3: Create ONLY if no existing query found ───────────────────────
+  // ── Step 2: Create ONLY if truly not found ───────────────────────────────
   if (!queryId) {
-    this.log('NeuronWriter: No existing query — creating new one for "' + nwKeyword + '"');
-    const created = await service.createQuery(projectId, nwKeyword);
-    if (!created.success || !created.queryId) {
-      this.warn('NeuronWriter: createQuery failed: ' + (created.error ?? 'unknown'));
+    this.log('NeuronWriter: No existing query — creating new for "' + nwKeyword + '"');
+    try {
+      const created = await service.createQuery(projectId, nwKeyword);
+      if (created.success && created.queryId) {
+        queryId = created.queryId;
+        this.log('NeuronWriter: Created new query ID=' + queryId);
+      } else {
+        this.warn('NeuronWriter: createQuery failed: ' + (created.error ?? 'unknown'));
+        return null;
+      }
+    } catch (e) {
+      this.warn('NeuronWriter: createQuery threw (non-fatal): ' + e);
       return null;
     }
-    queryId = created.queryId;
-    this.log('NeuronWriter: Created ID=' + queryId);
   }
 
-  // ── Step 4: Poll until ready ─────────────────────────────────────────────
-  for (let attempt = 1; attempt <= 40; attempt++) {
-    const res = await service.getQueryAnalysis(queryId);
-    if (res.success && res.analysis) {
-      this.log('NeuronWriter: Ready — ' + service.getAnalysisSummary(res.analysis));
-      return { service, queryId, analysis: res.analysis };
+  // ── Step 3: Poll until ready — ALL errors are non-fatal ──────────────────
+  this.log('NeuronWriter: Polling for analysis readiness...');
+  for (let attempt = 1; attempt <= NW_MAX_POLL_ATTEMPTS; attempt++) {
+    try {
+      const res = await service.getQueryAnalysis(queryId);
+
+      if (res.success && res.analysis) {
+        const hasData =
+          (res.analysis.terms?.length ?? 0) > 0 ||
+          (res.analysis.headingsH2?.length ?? 0) > 0;
+
+        if (hasData) {
+          this.log(
+            'NeuronWriter: READY — ' + service.getAnalysisSummary(res.analysis)
+          );
+          return { service, queryId, analysis: res.analysis };
+        }
+
+        // Analysis returned but empty — still wait
+        this.log(
+          'NeuronWriter: Analysis returned but empty, still waiting... attempt ' +
+            attempt + '/' + NW_MAX_POLL_ATTEMPTS
+        );
+      } else {
+        this.log(
+          'NeuronWriter: Not ready yet (' +
+            (res.error ?? 'no data') + ') — attempt ' +
+            attempt + '/' + NW_MAX_POLL_ATTEMPTS
+        );
+      }
+    } catch (pollErr) {
+      // Never crash the whole generation over a polling error
+      this.warn(
+        'NeuronWriter: Poll attempt ' + attempt + ' threw (non-fatal): ' + pollErr
+      );
     }
-    const delay = attempt <= 3 ? 2000 : attempt <= 10 ? 4000 : 6000;
-    this.log('NeuronWriter: Waiting... attempt ' + attempt + '/40');
-    await this.sleep(delay);
+
+    const delayMs =
+      attempt <= 3 ? 2000 :
+      attempt <= 10 ? 4000 :
+      attempt <= 20 ? 6000 : 8000;
+
+    await this.sleep(delayMs);
   }
 
-  this.warn('NeuronWriter: Analysis timed out after 40 attempts');
-  return null;
-}
-private async maybeInitNeuronWriter(
-  keyword: string,
-  options: GenerationOptions
-): Promise<NeuronBundle | null> {
-  const apiKey = this.config.neuronWriterApiKey?.trim();
-  const projectId = this.config.neuronWriterProjectId?.trim();
-  if (!apiKey || !projectId) return null;
-
-  const service = createNeuronWriterService(apiKey);
-  const nwKeyword = NeuronWriterService.cleanKeyword(keyword);
-
-  this.log('NeuronWriter: keyword="' + nwKeyword + '" (raw: "' + keyword + '")');
-
-  // ── Step 1: Check if provided query ID is valid ──────────────────────────
-  let queryId = options.neuronWriterQueryId?.trim() || '';
-
-  // ── Step 2: Search for existing query — ALL statuses ────────────────────
-  if (!queryId) {
-    const searchResult = await service.findQueryByKeyword(projectId, nwKeyword);
-    if (searchResult.success && searchResult.query) {
-      queryId = searchResult.query.id;
-      this.log('NeuronWriter: Reusing existing query ID=' + queryId + ' status=' + searchResult.query.status);
-    }
-  }
-
-  // ── Step 3: Create ONLY if no existing query found ───────────────────────
-  if (!queryId) {
-    this.log('NeuronWriter: No existing query — creating new one for "' + nwKeyword + '"');
-    const created = await service.createQuery(projectId, nwKeyword);
-    if (!created.success || !created.queryId) {
-      this.warn('NeuronWriter: createQuery failed: ' + (created.error ?? 'unknown'));
-      return null;
-    }
-    queryId = created.queryId;
-    this.log('NeuronWriter: Created ID=' + queryId);
-  }
-
-  // ── Step 4: Poll until ready ─────────────────────────────────────────────
-  for (let attempt = 1; attempt <= 40; attempt++) {
-    const res = await service.getQueryAnalysis(queryId);
-    if (res.success && res.analysis) {
-      this.log('NeuronWriter: Ready — ' + service.getAnalysisSummary(res.analysis));
-      return { service, queryId, analysis: res.analysis };
-    }
-    const delay = attempt <= 3 ? 2000 : attempt <= 10 ? 4000 : 6000;
-    this.log('NeuronWriter: Waiting... attempt ' + attempt + '/40');
-    await this.sleep(delay);
-  }
-
-  this.warn('NeuronWriter: Analysis timed out after 40 attempts');
+  this.warn(
+    'NeuronWriter: Analysis timed out after ' + NW_MAX_POLL_ATTEMPTS +
+      ' attempts — proceeding WITHOUT NeuronWriter'
+  );
   return null;
 }
 
@@ -1355,107 +1357,117 @@ Output ONLY the HTML paragraphs, nothing else.`;
         (nwConfigured && !neuron ? ' (configured but init failed)' : '')
     );
 
-    // ── Phase 2: AI Content Generation ─────────────────────────────────────
-    this.log('Phase 2: AI Content Generation');
-    const endPhase2Timer = this.startPhaseTimer('phase2_generation');
+    // ── Phase 2: AI Content Generation ─────────────────────────────────────────
+this.log('Phase 2: AI Content Generation');
+const endPhase2Timer = this.startPhaseTimer('phase2_generation');
 
-    const targetWordCount =
-      options.targetWordCount ??
-      neuron?.analysis?.recommended_length ??
-      serpAnalysis.recommendedWordCount ??
-      2500;
+const targetWordCount =
+  options.targetWordCount ??
+  neuron?.analysis?.recommended_length ??
+  serpAnalysis.recommendedWordCount ??
+  2500;
 
-    let title = options.title ?? options.keyword;
-    try {
-      if (!options.title) {
-        title = await this.generateTitle(options.keyword, serpAnalysis);
-      }
-    } catch (e) {
-      this.warn(`Title generation failed, using keyword: ${e}`);
-      title = options.title ?? options.keyword;
-    }
+let title = options.title ?? options.keyword;
+try {
+  if (!options.title) {
+    title = await this.generateTitle(options.keyword, serpAnalysis);
+  }
+} catch (e) {
+  this.warn('Title generation failed, using keyword: ' + e);
+  title = options.title ?? options.keyword;
+}
 
-    const neuronTermPrompt = neuron
-      ? neuron.service.formatTermsForPrompt(neuron.analysis.terms ?? [], neuron.analysis)
-      : undefined;
+const neuronTermPrompt = neuron
+  ? neuron.service.formatTermsForPrompt(neuron.analysis.terms ?? [], neuron.analysis)
+  : undefined;
 
-    const systemPrompt = buildMasterSystemPrompt();
-    const promptConfig = this.buildPromptConfig(
-      options.keyword,
-      title,
-      options,
-      serpAnalysis,
-      targetWordCount,
-      neuronTermPrompt,
-      videos
-    );
-    const userPrompt = buildMasterUserPrompt(promptConfig);
-    this.log(`Using master prompt system: ${userPrompt.length} char user prompt`);
+const systemPrompt = buildMasterSystemPrompt();
+const promptConfig = this.buildPromptConfig(
+  options.keyword,
+  title,
+  options,
+  serpAnalysis,
+  targetWordCount,
+  neuronTermPrompt,
+  videos
+);
+const userPrompt = buildMasterUserPrompt(promptConfig);
+this.log('Using master prompt system: ' + userPrompt.length + ' char user prompt');
 
-    let content: string;
-    try {
-      let result: { content: string };
-      if (this.config.useConsensus && !neuronTermPrompt && this.engine.getAvailableModels().length > 1) {
-        this.log('Using multi-model consensus generation...');
-        const consensusResult = await this.engine.generateWithConsensus(userPrompt, systemPrompt);
-        result = { content: consensusResult.finalContent };
-      } else {
-        const initialMaxTokens =
-          targetWordCount > 5000 ? 32768 : targetWordCount > 3000 ? 16384 : 8192;
-        result = await this.engine.generateWithModel({
-          prompt: userPrompt,
-          model: this.config.primaryModel ?? 'gemini',
-          apiKeys: this.config.apiKeys,
-          systemPrompt,
-          temperature: 0.72,
-          maxTokens: initialMaxTokens,
-        });
-      }
-      content = result.content;
-    } catch (genError) {
-      const msg = genError instanceof Error ? genError.message : String(genError);
-      this.logError(`AI content generation failed: ${msg}`);
-      throw new Error(
-        `AI content generation failed: ${msg}. Check your API key and model configuration.`
-      );
-    }
-
-    if (!content || content.trim().length < MIN_VALID_CONTENT_LENGTH) {
-      this.logError('AI returned empty or near-empty content');
-      throw new Error(
-        'AI model returned empty content. Check your API key, model selection, and ensure the model supports long-form generation.'
-      );
-    }
-
-    // Ensure long-form completeness
-    content = await this.ensureLongFormComplete({
-      keyword: options.keyword,
-      title,
-      promptConfig,
+let content: string;
+try {
+  let result: { content: string };
+  if (
+    this.config.useConsensus &&
+    !neuronTermPrompt &&
+    this.engine.getAvailableModels().length > 1
+  ) {
+    this.log('Using multi-model consensus generation...');
+    const consensusResult = await this.engine.generateWithConsensus(userPrompt, systemPrompt);
+    result = { content: consensusResult.finalContent };
+  } else {
+    const initialMaxTokens =
+      targetWordCount > 5000 ? 32768 :
+      targetWordCount > 3000 ? 16384 : 8192;
+    result = await this.engine.generateWithModel({
+      prompt: userPrompt,
       model: this.config.primaryModel ?? 'gemini',
-      currentHtml: content,
-      targetWordCount,
+      apiKeys: this.config.apiKeys,
+      systemPrompt,
+      temperature: 0.72,
+      maxTokens: initialMaxTokens,
     });
+  }
+  content = result.content;
+} catch (genError) {
+  const msg = genError instanceof Error ? genError.message : String(genError);
+  this.logError('AI content generation failed: ' + msg);
+  throw new Error(
+    'AI content generation failed: ' + msg +
+      '. Check your API key and model configuration.'
+  );
+}
 
-    // Inject YouTube video if not already embedded
-    if (videos.length > 0 && !content.includes('youtube.com/embed') && !content.includes('youtube-nocookie.com/embed')) {
-      const videoSection = this.buildVideoSection(videos);
-      content = this.insertBeforeConclusion(content, videoSection);
-      this.log('Injected YouTube video section');
-    }
+if (!content || content.trim().length < MIN_VALID_CONTENT_LENGTH) {
+  this.logError('AI returned empty or near-empty content');
+  throw new Error(
+    'AI model returned empty content. Check your API key, model selection, and ensure the model supports long-form generation.'
+  );
+}
 
-    // Append references (pre-processing snapshot)
-    if (references.length > 0) {
-      const referencesSection = this.referenceService.formatReferencesSection(references);
-      content = content + referencesSection;
-      this.log(`Added ${references.length} references`);
-    }
+// Ensure long-form completeness
+content = await this.ensureLongFormComplete({
+  keyword: options.keyword,
+  title,
+  promptConfig,
+  model: this.config.primaryModel ?? 'gemini',
+  currentHtml: content,
+  targetWordCount,
+});
 
-    const phase2Ms = endPhase2Timer();
-    this.log(
-      `Phase 2 complete in ${(phase2Ms / 1000).toFixed(1)}s — ` +
-        `${this.countWordsFromHtml(content)} words generated`
-    );
+// Inject YouTube video if not already embedded
+if (
+  videos.length > 0 &&
+  !content.includes('youtube.com/embed') &&
+  !content.includes('youtube-nocookie.com/embed')
+) {
+  const videoSection = this.buildVideoSection(videos);
+  content = this.insertBeforeConclusion(content, videoSection);
+  this.log('Injected YouTube video section');
+}
+
+// Append references
+if (references.length > 0) {
+  const referencesSection = this.referenceService.formatReferencesSection(references);
+  content = content + referencesSection;
+  this.log('Added ' + references.length + ' references');
+}
+
+const phase2Ms = endPhase2Timer();
+this.log(
+  'Phase 2 complete in ' + (phase2Ms / 1000).toFixed(1) + 's — ' +
+    this.countWordsFromHtml(content) + ' words generated'
+);
 
     // ── Phase 3: Post-Processing Pipeline ──────────────────────────────────
     this.log('Phase 3: Content Enhancement Pipeline');
