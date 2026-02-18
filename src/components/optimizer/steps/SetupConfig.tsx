@@ -312,7 +312,7 @@ export function SetupConfig() {
           {/* Fallback Models */}
           <div className="p-4 bg-background/50 border border-border rounded-xl space-y-3">
             <label className="block text-sm font-medium text-foreground">Fallback Models (tried in order if primary fails)</label>
-            <p className="text-xs text-muted-foreground">If the primary model fails (e.g., ERR_HTTP2_PROTOCOL_ERROR), these models are tried automatically in order. Only models with configured API keys are available.</p>
+            <p className="text-xs text-muted-foreground">Select backup models to try automatically when the primary fails. Models without an API key are dimmed — add the key above to enable them.</p>
             <div className="flex flex-wrap gap-2 mt-2">
               {[
                 { key: 'gemini', label: 'Gemini', hasKey: !!config.geminiApiKey },
@@ -321,7 +321,7 @@ export function SetupConfig() {
                 { key: 'openrouter', label: 'OpenRouter', hasKey: !!config.openrouterApiKey },
                 { key: 'groq', label: 'Groq', hasKey: !!config.groqApiKey },
               ]
-                .filter(m => m.key !== config.primaryModel && m.hasKey)
+                .filter(m => m.key !== config.primaryModel)
                 .map(m => {
                   const isSelected = (config.fallbackModels || []).includes(m.key);
                   const currentFallbacks = config.fallbackModels || [];
@@ -335,14 +335,18 @@ export function SetupConfig() {
                           setConfig({ fallbackModels: [...currentFallbacks, m.key] });
                         }
                       }}
+                      title={m.hasKey ? `Click to ${isSelected ? 'remove' : 'add'} ${m.label} as fallback` : `⚠️ No API key set for ${m.label} — add it in the API Keys section above`}
                       className={cn(
                         "px-3 py-1.5 rounded-lg text-sm font-medium transition-all border",
                         isSelected
                           ? "bg-primary/20 border-primary/50 text-primary"
-                          : "bg-background/30 border-border/50 text-muted-foreground hover:border-border"
+                          : m.hasKey
+                            ? "bg-background/30 border-border/50 text-muted-foreground hover:border-border"
+                            : "bg-background/10 border-border/20 text-muted-foreground/50 hover:border-border/40"
                       )}
                     >
                       {isSelected ? <Check className="w-3 h-3 inline mr-1" /> : null}
+                      {!m.hasKey ? <AlertCircle className="w-3 h-3 inline mr-1 text-amber-500/70" /> : null}
                       {m.label}
                     </button>
                   );
@@ -353,6 +357,15 @@ export function SetupConfig() {
                 Fallback order: {(config.fallbackModels || []).map((f, i) => <span key={f}>{i > 0 ? ' → ' : ''}<code className="text-primary">{f}</code></span>)}
               </p>
             )}
+            {(config.fallbackModels || []).some(f => {
+              const keyMap: Record<string, string> = { gemini: 'geminiApiKey', openai: 'openaiApiKey', anthropic: 'anthropicApiKey', openrouter: 'openrouterApiKey', groq: 'groqApiKey' };
+              return !(config as any)[keyMap[f]];
+            }) && (
+                <p className="text-xs text-amber-400 flex items-center gap-1 mt-1">
+                  <AlertCircle className="w-3 h-3" />
+                  Some selected fallback models don't have API keys yet — they'll be skipped at runtime until you add them.
+                </p>
+              )}
           </div>
 
           <label className="flex items-center gap-3 cursor-pointer">
