@@ -779,6 +779,21 @@ export class NeuronWriterService {
   }
 }
 
+  /**
+   * Remove a SINGLE keyword from the session dedup cache.
+   * Used when the orchestrator detects a permanently broken query
+   * and needs to force-create a replacement.
+   */
+  static removeSessionEntry(keyword: string): boolean {
+    const normalized = NeuronWriterService.cleanKeyword(keyword);
+    const deleted = SESSION_DEDUP_MAP.delete(normalized);
+    if (deleted) {
+      console.log('[NeuronWriter] 🗑️ Removed session cache entry for "' + normalized + '"');
+    }
+    return deleted;
+  }
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // LIVE SCORING
 // ─────────────────────────────────────────────────────────────────────────────
