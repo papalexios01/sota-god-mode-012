@@ -777,7 +777,6 @@ export class NeuronWriterService {
   static getSessionCacheEntries(): SessionEntry[] {
     return Array.from(SESSION_DEDUP_MAP.values());
   }
-}
 
   /**
    * Remove a SINGLE keyword from the session dedup cache.
@@ -792,6 +791,8 @@ export class NeuronWriterService {
     }
     return deleted;
   }
+}
+
 
 
 // ─────────────────────────────────────────────────────────────────────────────
