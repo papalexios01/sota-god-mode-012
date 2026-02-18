@@ -692,7 +692,7 @@ private async maybeInitNeuronWriter(
         for (let createAttempt = 1; createAttempt <= MAX_CREATE_RETRIES; createAttempt++) {
           this.log(`NeuronWriter: Creating new Content Writer query for "${keyword}"... (attempt ${createAttempt}/${MAX_CREATE_RETRIES})`);
           try {
-            const created = await service.createQuery(projectId, keyword);
+            const created = await service.createQuery(projectId, nwKeyword);
             if (created.success && created.queryId) {
               queryId = created.queryId;
               this.log(`NeuronWriter: Created NEW query (ID: ${queryId})`);
