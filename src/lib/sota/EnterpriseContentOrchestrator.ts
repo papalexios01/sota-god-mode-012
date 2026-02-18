@@ -1,7 +1,14 @@
 // src/lib/sota/EnterpriseContentOrchestrator.ts
 // ═══════════════════════════════════════════════════════════════════════════════
-// ENTERPRISE CONTENT ORCHESTRATOR v5.1
+// ENTERPRISE CONTENT ORCHESTRATOR v5.2
 // ═══════════════════════════════════════════════════════════════════════════════
+//
+// v5.2 Fixes (on top of v5.1):
+//   • FIXED: generateContent() validates options.keyword at the top — throws
+//     a clear error instead of cascading TypeErrors deep in the pipeline
+//   • FIXED: Content-level cache key uses simpleHash() for collision resistance
+//   • FIXED: generateTitle() null-guards keyword before .split()
+//   • FIXED: generateSlug() null-guards title before .toLowerCase()
 //
 // v5.1 Fixes:
 //   • FIXED: maybeInitNeuronWriter — slug keyword cleaned before all NW calls
@@ -125,6 +132,28 @@ interface OrchestratorTelemetry {
   selfCritiqueApplied: boolean;
   warnings: string[];
   errors: string[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ✅ FIX #8: Deterministic hash for content-level cache keys
+//
+// Same helper used in SOTAContentGenerationEngine.ts — prevents cache
+// collisions when keywords or titles share common prefixes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function simpleHash(str: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -321,7 +350,9 @@ export class EnterpriseContentOrchestrator {
       .replace(/'/g, '&#39;');
   }
 
+  // ✅ FIX #10: Null-guard title before calling .toLowerCase()
   private generateSlug(title: string): string {
+    if (!title || typeof title !== 'string') return 'untitled-content';
     return title
       .toLowerCase()
       .replace(/[^a-z0-9-\s]/g, '')
@@ -516,112 +547,111 @@ export class EnterpriseContentOrchestrator {
   // ─────────────────────────────────────────────────────────────────────────
 
   private async maybeInitNeuronWriter(
-  keyword: string,
-  options: GenerationOptions
-): Promise<NeuronBundle | null> {
-  const apiKey = this.config.neuronWriterApiKey?.trim();
-  const projectId = this.config.neuronWriterProjectId?.trim();
+    keyword: string,
+    options: GenerationOptions
+  ): Promise<NeuronBundle | null> {
+    const apiKey = this.config.neuronWriterApiKey?.trim();
+    const projectId = this.config.neuronWriterProjectId?.trim();
 
-  if (!apiKey || !projectId) {
-    this.log(
-      'NeuronWriter SKIPPED — ' +
-        (!apiKey ? 'API key MISSING' : 'Project ID MISSING')
+    if (!apiKey || !projectId) {
+      this.log(
+        'NeuronWriter SKIPPED — ' +
+          (!apiKey ? 'API key MISSING' : 'Project ID MISSING')
+      );
+      return null;
+    }
+
+    const service = createNeuronWriterService(apiKey);
+    const nwKeyword = NeuronWriterService.cleanKeyword(keyword);
+    this.log('NeuronWriter: keyword="' + nwKeyword + '" (raw: "' + keyword + '")');
+
+    let queryId = options.neuronWriterQueryId?.trim() || '';
+
+    // ── Step 1: Search ALL statuses ──────────────────────────────────────────
+    if (!queryId) {
+      try {
+        const searchResult = await service.findQueryByKeyword(projectId, nwKeyword);
+        if (searchResult.success && searchResult.query?.id) {
+          queryId = searchResult.query.id;
+          this.log(
+            'NeuronWriter: Found existing query ID=' + queryId +
+              ' status=' + (searchResult.query.status || 'unknown')
+          );
+        }
+      } catch (e) {
+        this.warn('NeuronWriter: findQueryByKeyword threw (non-fatal): ' + e);
+      }
+    }
+
+    // ── Step 2: Create ONLY if truly not found ───────────────────────────────
+    if (!queryId) {
+      this.log('NeuronWriter: No existing query — creating new for "' + nwKeyword + '"');
+      try {
+        const created = await service.createQuery(projectId, nwKeyword);
+        if (created.success && created.queryId) {
+          queryId = created.queryId;
+          this.log('NeuronWriter: Created new query ID=' + queryId);
+        } else {
+          this.warn('NeuronWriter: createQuery failed: ' + (created.error ?? 'unknown'));
+          return null;
+        }
+      } catch (e) {
+        this.warn('NeuronWriter: createQuery threw (non-fatal): ' + e);
+        return null;
+      }
+    }
+
+    // ── Step 3: Poll until ready — ALL errors are non-fatal ──────────────────
+    this.log('NeuronWriter: Polling for analysis readiness...');
+    for (let attempt = 1; attempt <= NW_MAX_POLL_ATTEMPTS; attempt++) {
+      try {
+        const res = await service.getQueryAnalysis(queryId);
+
+        if (res.success && res.analysis) {
+          const hasData =
+            (res.analysis.terms?.length ?? 0) > 0 ||
+            (res.analysis.headingsH2?.length ?? 0) > 0;
+
+          if (hasData) {
+            this.log(
+              'NeuronWriter: READY — ' + service.getAnalysisSummary(res.analysis)
+            );
+            return { service, queryId, analysis: res.analysis };
+          }
+
+          // Analysis returned but empty — still wait
+          this.log(
+            'NeuronWriter: Analysis returned but empty, still waiting... attempt ' +
+              attempt + '/' + NW_MAX_POLL_ATTEMPTS
+          );
+        } else {
+          this.log(
+            'NeuronWriter: Not ready yet (' +
+              (res.error ?? 'no data') + ') — attempt ' +
+              attempt + '/' + NW_MAX_POLL_ATTEMPTS
+          );
+        }
+      } catch (pollErr) {
+        // Never crash the whole generation over a polling error
+        this.warn(
+          'NeuronWriter: Poll attempt ' + attempt + ' threw (non-fatal): ' + pollErr
+        );
+      }
+
+      const delayMs =
+        attempt <= 3 ? 2000 :
+        attempt <= 10 ? 4000 :
+        attempt <= 20 ? 6000 : 8000;
+
+      await this.sleep(delayMs);
+    }
+
+    this.warn(
+      'NeuronWriter: Analysis timed out after ' + NW_MAX_POLL_ATTEMPTS +
+        ' attempts — proceeding WITHOUT NeuronWriter'
     );
     return null;
   }
-
-  const service = createNeuronWriterService(apiKey);
-  const nwKeyword = NeuronWriterService.cleanKeyword(keyword);
-  this.log('NeuronWriter: keyword="' + nwKeyword + '" (raw: "' + keyword + '")');
-
-  let queryId = options.neuronWriterQueryId?.trim() || '';
-
-  // ── Step 1: Search ALL statuses ──────────────────────────────────────────
-  if (!queryId) {
-    try {
-      const searchResult = await service.findQueryByKeyword(projectId, nwKeyword);
-      if (searchResult.success && searchResult.query?.id) {
-        queryId = searchResult.query.id;
-        this.log(
-          'NeuronWriter: Found existing query ID=' + queryId +
-            ' status=' + (searchResult.query.status || 'unknown')
-        );
-      }
-    } catch (e) {
-      this.warn('NeuronWriter: findQueryByKeyword threw (non-fatal): ' + e);
-    }
-  }
-
-  // ── Step 2: Create ONLY if truly not found ───────────────────────────────
-  if (!queryId) {
-    this.log('NeuronWriter: No existing query — creating new for "' + nwKeyword + '"');
-    try {
-      const created = await service.createQuery(projectId, nwKeyword);
-      if (created.success && created.queryId) {
-        queryId = created.queryId;
-        this.log('NeuronWriter: Created new query ID=' + queryId);
-      } else {
-        this.warn('NeuronWriter: createQuery failed: ' + (created.error ?? 'unknown'));
-        return null;
-      }
-    } catch (e) {
-      this.warn('NeuronWriter: createQuery threw (non-fatal): ' + e);
-      return null;
-    }
-  }
-
-  // ── Step 3: Poll until ready — ALL errors are non-fatal ──────────────────
-  this.log('NeuronWriter: Polling for analysis readiness...');
-  for (let attempt = 1; attempt <= NW_MAX_POLL_ATTEMPTS; attempt++) {
-    try {
-      const res = await service.getQueryAnalysis(queryId);
-
-      if (res.success && res.analysis) {
-        const hasData =
-          (res.analysis.terms?.length ?? 0) > 0 ||
-          (res.analysis.headingsH2?.length ?? 0) > 0;
-
-        if (hasData) {
-          this.log(
-            'NeuronWriter: READY — ' + service.getAnalysisSummary(res.analysis)
-          );
-          return { service, queryId, analysis: res.analysis };
-        }
-
-        // Analysis returned but empty — still wait
-        this.log(
-          'NeuronWriter: Analysis returned but empty, still waiting... attempt ' +
-            attempt + '/' + NW_MAX_POLL_ATTEMPTS
-        );
-      } else {
-        this.log(
-          'NeuronWriter: Not ready yet (' +
-            (res.error ?? 'no data') + ') — attempt ' +
-            attempt + '/' + NW_MAX_POLL_ATTEMPTS
-        );
-      }
-    } catch (pollErr) {
-      // Never crash the whole generation over a polling error
-      this.warn(
-        'NeuronWriter: Poll attempt ' + attempt + ' threw (non-fatal): ' + pollErr
-      );
-    }
-
-    const delayMs =
-      attempt <= 3 ? 2000 :
-      attempt <= 10 ? 4000 :
-      attempt <= 20 ? 6000 : 8000;
-
-    await this.sleep(delayMs);
-  }
-
-  this.warn(
-    'NeuronWriter: Analysis timed out after ' + NW_MAX_POLL_ATTEMPTS +
-      ' attempts — proceeding WITHOUT NeuronWriter'
-  );
-  return null;
-}
-
 
   // ─────────────────────────────────────────────────────────────────────────
   // NEURONWRITER IMPROVEMENT LOOP
@@ -1200,7 +1230,7 @@ Output ONLY the HTML paragraphs, nothing else.`;
     return { content: stripped, references: match[0] };
   }
 
-    private ensureReferencesSection(
+  private ensureReferencesSection(
     html: string,
     refs: Reference[],
     serp: SERPAnalysis
@@ -1291,17 +1321,30 @@ Output ONLY the HTML paragraphs, nothing else.`;
   // MAIN GENERATION ENTRY POINT
   // ─────────────────────────────────────────────────────────────────────────
 
-    async generateContent(
+  async generateContent(
     options: GenerationOptions
   ): Promise<GeneratedContent> {
+    // ✅ FIX #7: Input validation — catch undefined/empty keyword IMMEDIATELY
+    //    instead of letting it cascade to TypeError deep in the pipeline.
+    //    This was the secondary defense for the GodModeEngine call-signature bug.
+    if (!options || typeof options.keyword !== 'string' || options.keyword.trim().length === 0) {
+      const received = options
+        ? `keyword=${JSON.stringify(options.keyword)}`
+        : 'options=undefined';
+      throw new Error(
+        `generateContent() requires options.keyword to be a non-empty string. Received: ${received}. ` +
+        `This usually means the caller passed positional arguments instead of a single options object.`
+      );
+    }
+
     this.onProgress = options.onProgress;
     this.telemetry = this.createFreshTelemetry();
     const startTime = Date.now();
 
     this.log(`Starting content generation for "${options.keyword}"`);
 
-    // Cache check
-    const cacheKey = `${options.keyword}-${options.title ?? ''}-${options.contentType ?? 'guide'}`;
+    // ✅ FIX #8: Use simpleHash for collision-resistant cache key
+    const cacheKey = `orch:${simpleHash(options.keyword)}:${simpleHash(options.title ?? '')}:${options.contentType ?? 'guide'}`;
     const cached = generationCache.get<GeneratedContent>(cacheKey);
     if (cached) {
       this.log('Cache hit — returning cached content');
@@ -1358,116 +1401,117 @@ Output ONLY the HTML paragraphs, nothing else.`;
     );
 
     // ── Phase 2: AI Content Generation ─────────────────────────────────────────
-this.log('Phase 2: AI Content Generation');
-const endPhase2Timer = this.startPhaseTimer('phase2_generation');
+    this.log('Phase 2: AI Content Generation');
+    const endPhase2Timer = this.startPhaseTimer('phase2_generation');
 
-const targetWordCount =
-  options.targetWordCount ??
-  neuron?.analysis?.recommended_length ??
-  serpAnalysis.recommendedWordCount ??
-  2500;
+    const targetWordCount =
+      options.targetWordCount ??
+      neuron?.analysis?.recommended_length ??
+      serpAnalysis.recommendedWordCount ??
+      2500;
 
-let title = options.title ?? options.keyword;
-try {
-  if (!options.title) {
-    title = await this.generateTitle(options.keyword, serpAnalysis);
-  }
-} catch (e) {
-  this.warn('Title generation failed, using keyword: ' + e);
-  title = options.title ?? options.keyword;
-}
+    // ✅ FIX #9: Null-guard keyword before .split() in generateTitle
+    let title = options.title ?? options.keyword;
+    try {
+      if (!options.title) {
+        title = await this.generateTitle(options.keyword, serpAnalysis);
+      }
+    } catch (e) {
+      this.warn('Title generation failed, using keyword: ' + e);
+      title = options.title ?? options.keyword;
+    }
 
-const neuronTermPrompt = neuron
-  ? neuron.service.formatTermsForPrompt(neuron.analysis.terms ?? [], neuron.analysis)
-  : undefined;
+    const neuronTermPrompt = neuron
+      ? neuron.service.formatTermsForPrompt(neuron.analysis.terms ?? [], neuron.analysis)
+      : undefined;
 
-const systemPrompt = buildMasterSystemPrompt();
-const promptConfig = this.buildPromptConfig(
-  options.keyword,
-  title,
-  options,
-  serpAnalysis,
-  targetWordCount,
-  neuronTermPrompt,
-  videos
-);
-const userPrompt = buildMasterUserPrompt(promptConfig);
-this.log('Using master prompt system: ' + userPrompt.length + ' char user prompt');
+    const systemPrompt = buildMasterSystemPrompt();
+    const promptConfig = this.buildPromptConfig(
+      options.keyword,
+      title,
+      options,
+      serpAnalysis,
+      targetWordCount,
+      neuronTermPrompt,
+      videos
+    );
+    const userPrompt = buildMasterUserPrompt(promptConfig);
+    this.log('Using master prompt system: ' + userPrompt.length + ' char user prompt');
 
-let content: string;
-try {
-  let result: { content: string };
-  if (
-    this.config.useConsensus &&
-    !neuronTermPrompt &&
-    this.engine.getAvailableModels().length > 1
-  ) {
-    this.log('Using multi-model consensus generation...');
-    const consensusResult = await this.engine.generateWithConsensus(userPrompt, systemPrompt);
-    result = { content: consensusResult.finalContent };
-  } else {
-    const initialMaxTokens =
-      targetWordCount > 5000 ? 32768 :
-      targetWordCount > 3000 ? 16384 : 8192;
-    result = await this.engine.generateWithModel({
-      prompt: userPrompt,
+    let content: string;
+    try {
+      let result: { content: string };
+      if (
+        this.config.useConsensus &&
+        !neuronTermPrompt &&
+        this.engine.getAvailableModels().length > 1
+      ) {
+        this.log('Using multi-model consensus generation...');
+        const consensusResult = await this.engine.generateWithConsensus(userPrompt, systemPrompt);
+        result = { content: consensusResult.finalContent };
+      } else {
+        const initialMaxTokens =
+          targetWordCount > 5000 ? 32768 :
+          targetWordCount > 3000 ? 16384 : 8192;
+        result = await this.engine.generateWithModel({
+          prompt: userPrompt,
+          model: this.config.primaryModel ?? 'gemini',
+          apiKeys: this.config.apiKeys,
+          systemPrompt,
+          temperature: 0.72,
+          maxTokens: initialMaxTokens,
+        });
+      }
+      content = result.content;
+    } catch (genError) {
+      const msg = genError instanceof Error ? genError.message : String(genError);
+      this.logError('AI content generation failed: ' + msg);
+      throw new Error(
+        'AI content generation failed: ' + msg +
+          '. Check your API key and model configuration.'
+      );
+    }
+
+    if (!content || content.trim().length < MIN_VALID_CONTENT_LENGTH) {
+      this.logError('AI returned empty or near-empty content');
+      throw new Error(
+        'AI model returned empty content. Check your API key, model selection, and ensure the model supports long-form generation.'
+      );
+    }
+
+    // Ensure long-form completeness
+    content = await this.ensureLongFormComplete({
+      keyword: options.keyword,
+      title,
+      promptConfig,
       model: this.config.primaryModel ?? 'gemini',
-      apiKeys: this.config.apiKeys,
-      systemPrompt,
-      temperature: 0.72,
-      maxTokens: initialMaxTokens,
+      currentHtml: content,
+      targetWordCount,
     });
-  }
-  content = result.content;
-} catch (genError) {
-  const msg = genError instanceof Error ? genError.message : String(genError);
-  this.logError('AI content generation failed: ' + msg);
-  throw new Error(
-    'AI content generation failed: ' + msg +
-      '. Check your API key and model configuration.'
-  );
-}
 
-if (!content || content.trim().length < MIN_VALID_CONTENT_LENGTH) {
-  this.logError('AI returned empty or near-empty content');
-  throw new Error(
-    'AI model returned empty content. Check your API key, model selection, and ensure the model supports long-form generation.'
-  );
-}
+    // Inject YouTube video if not already embedded
+    if (
+      videos.length > 0 &&
+      !content.includes('youtube.com/embed') &&
+      !content.includes('youtube-nocookie.com/embed')
+    ) {
+      const videoSection = this.buildVideoSection(videos);
+      content = this.insertBeforeConclusion(content, videoSection);
+      this.log('Injected YouTube video section');
+    }
 
-// Ensure long-form completeness
-content = await this.ensureLongFormComplete({
-  keyword: options.keyword,
-  title,
-  promptConfig,
-  model: this.config.primaryModel ?? 'gemini',
-  currentHtml: content,
-  targetWordCount,
-});
+    // Append references
+    if (references.length > 0) {
+      const referencesSection = this.referenceService.formatReferencesSection(references);
+      content = content + referencesSection;
+      this.log('Added ' + references.length + ' references');
+    }
 
-// Inject YouTube video if not already embedded
-if (
-  videos.length > 0 &&
-  !content.includes('youtube.com/embed') &&
-  !content.includes('youtube-nocookie.com/embed')
-) {
-  const videoSection = this.buildVideoSection(videos);
-  content = this.insertBeforeConclusion(content, videoSection);
-  this.log('Injected YouTube video section');
-}
-
-// Append references
-if (references.length > 0) {
-  const referencesSection = this.referenceService.formatReferencesSection(references);
-  content = content + referencesSection;
-  this.log('Added ' + references.length + ' references');
-}
-
-const phase2Ms = endPhase2Timer();
-this.log(
-  'Phase 2 complete in ' + (phase2Ms / 1000).toFixed(1) + 's — ' +
-    this.countWordsFromHtml(content) + ' words generated'
-);
+    const phase2Ms = endPhase2Timer();
+    this.log(
+      'Phase 2 complete in ' + (phase2Ms / 1000).toFixed(1) + 's — ' +
+        this.countWordsFromHtml(content) + ' words generated'
+    );
 
     // ── Phase 3: Post-Processing Pipeline ──────────────────────────────────
     this.log('Phase 3: Content Enhancement Pipeline');
@@ -1779,7 +1823,9 @@ this.log(
     return generatedContent;
   }
 
+  // ✅ FIX #9: Null-guard keyword before .split()
   private async generateTitle(keyword: string, serp: SERPAnalysis): Promise<string> {
+    if (!keyword || typeof keyword !== 'string') return 'Untitled Content';
     const words = keyword.split(' ');
     const capitalized = words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     const templates = [
@@ -1866,5 +1912,3 @@ export function createOrchestrator(config: OrchestratorConfig): EnterpriseConten
 }
 
 export default EnterpriseContentOrchestrator;
-
-
