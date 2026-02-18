@@ -3,6 +3,8 @@
  *
  * Provides a clean interface for controlling the autonomous
  * SEO maintenance engine from React components.
+ *
+ * v2.2: Fixed handleStateUpdate — no longer mutates the incoming updates object.
  */
 
 import { useRef, useCallback, useEffect } from 'react';
@@ -36,17 +38,24 @@ export function useGodModeEngine() {
    * Handle state updates from engine.
    * The engine sends deltas for stats and single-item arrays for history.
    * This hook translates those into the correct store operations.
+   *
+   * ✅ FIX #4: Uses destructuring instead of `delete` to avoid mutating
+   *    the caller's object. Previously, `delete updates.history` and
+   *    `delete updates.stats` would remove properties from the engine's
+   *    object, causing subtle bugs if the engine inspected it post-callback.
    */
   const handleStateUpdate = useCallback((updates: Partial<GodModeState>) => {
+    // ✅ FIX #4: Destructure into separate variables — never mutate the original
+    const { history, stats, ...rest } = updates;
+
     // Handle history append specially — engine sends [singleItem], we prepend via store
-    if (updates.history && Array.isArray(updates.history)) {
-      updates.history.forEach(item => addGodModeHistory(item));
-      delete updates.history;
+    if (history && Array.isArray(history)) {
+      history.forEach(item => addGodModeHistory(item));
     }
 
     // Handle stats: extract delta fields + pass-through metadata fields
-    if (updates.stats && typeof updates.stats === 'object') {
-      const statsUpdate = updates.stats as Record<string, unknown>;
+    if (stats && typeof stats === 'object') {
+      const statsUpdate = stats as Record<string, unknown>;
       if (statsUpdate.totalProcessed !== undefined) {
         updateGodModeStats({
           totalProcessed: statsUpdate.totalProcessed as number,
@@ -54,19 +63,18 @@ export function useGodModeEngine() {
           errorCount: (statsUpdate.errorCount as number) || 0,
           qualityScore: (statsUpdate.qualityScore as number) || (statsUpdate.avgQualityScore as number) || 0,
           wordCount: (statsUpdate.wordCount as number) || (statsUpdate.totalWordsGenerated as number) || 0,
-          // FIX: Forward metadata fields so they aren't silently dropped
+          // Forward metadata fields so they aren't silently dropped
           cycleCount: statsUpdate.cycleCount as number | undefined,
           sessionStartedAt: statsUpdate.sessionStartedAt as Date | null | undefined,
           lastScanAt: statsUpdate.lastScanAt as Date | null | undefined,
           nextScanAt: statsUpdate.nextScanAt as Date | null | undefined,
         });
-        delete updates.stats;
       }
     }
 
     // Apply remaining updates (status, currentPhase, currentUrl, queue, config, etc.)
-    if (Object.keys(updates).length > 0) {
-      setGodModeState(updates);
+    if (Object.keys(rest).length > 0) {
+      setGodModeState(rest);
     }
   }, [setGodModeState, addGodModeHistory, updateGodModeStats]);
 
