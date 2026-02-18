@@ -1,3 +1,14 @@
+// src/lib/store.ts
+// ═══════════════════════════════════════════════════════════════════════════════
+// ZUSTAND STORE v2.2
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// v2.2 Fix:
+//   • FIXED: Added custom `merge` function + `rehydrateAllDates()` to persist
+//     middleware so Date objects survive JSON round-trip through localStorage.
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type {
@@ -437,4 +448,42 @@ export const useOptimizerStore = create<OptimizerStore>()(
       })),
       removeGeneratedContent: (itemId) => set((state) => {
         const { [itemId]: _, ...rest } = state.generatedContentsStore;
-        return { generatedContentsStore:
+        return { generatedContentsStore: rest };
+      }),
+
+      // Persisted NeuronWriter Data Store
+      neuronWriterDataStore: {},
+      setNeuronWriterData: (itemId, data) => set((state) => ({
+        neuronWriterDataStore: { ...state.neuronWriterDataStore, [itemId]: data }
+      })),
+      removeNeuronWriterData: (itemId) => set((state) => {
+        const { [itemId]: _, ...rest } = state.neuronWriterDataStore;
+        return { neuronWriterDataStore: rest };
+      }),
+
+      // Persisted Editor Auto-Save Store
+      editedContentsStore: {},
+      setEditedContent: (itemId, content) => set((state) => ({
+        editedContentsStore: { ...state.editedContentsStore, [itemId]: content }
+      })),
+      removeEditedContent: (itemId) => set((state) => {
+        const { [itemId]: _, ...rest } = state.editedContentsStore;
+        return { editedContentsStore: rest };
+      }),
+      clearEditedContents: () => set({ editedContentsStore: {} }),
+    }),
+    {
+      name: 'wp-optimizer-storage',
+
+      // ✅ FIX #5: Rehydrate Date objects that were serialized to ISO strings
+      merge: (persistedState, currentState) => {
+        const merged = {
+          ...currentState,
+          ...(persistedState as object),
+        };
+        rehydrateAllDates(merged);
+        return merged;
+      },
+    }
+  )
+);
