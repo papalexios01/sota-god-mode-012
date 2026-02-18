@@ -1,24 +1,21 @@
 // src/lib/sota/NeuronWriterService.ts
 // ═══════════════════════════════════════════════════════════════════════════════
-// NEURONWRITER SERVICE v5.0 — DEFINITIVE DEDUPLICATION FIX
+// NEURONWRITER SERVICE v5.1 — DEFINITIVE DEDUPLICATION FIX
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// ROOT CAUSE FIXED:
+// v5.1 Changes (on top of v5.0):
+//   • NEW: removeSessionEntry() — allows orchestrator to clear a single keyword
+//     from the session dedup cache when it detects a permanently broken query,
+//     so createQuery() can create a genuine replacement instead of returning
+//     the same broken ID.
+//
+// v5.0 ROOT CAUSE FIXED:
 //   The app was creating duplicate queries because:
-//   1. findQueryByKeyword SKIPPED "in_progress" queries — so newly-created
-//      queries were invisible to the finder on next run → created again
+//   1. findQueryByKeyword SKIPPED "in_progress" queries
 //   2. No in-memory session guard prevented re-creation within the same session
 //   3. Status filter was too strict — only "ready" was accepted
 //
-// v5.0 Changes:
-//   • findQueryByKeyword now matches ANY status including in_progress/pending
-//   • In-memory session dedup map: if keyword was already found/created this
-//     session, ALWAYS return the existing queryId — never call createQuery again
-//   • createQuery is now called ONLY if findQueryByKeyword returns nothing
-//   • cleanKeyword() strips slugs, years, punctuation before all NW API calls
-//   • Jaccard token overlap ≥ 50% for fuzzy matching (was 60%)
-//   • formatTermsForPrompt uses '\n' join (was broken '\\n')
-//   • getQueryAnalysis returns retryable error on in_progress (no throw)
+// ═══════════════════════════════════════════════════════════════════════════════
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES
@@ -69,7 +66,7 @@ export interface NeuronWriterAnalysis {
 export interface NeuronWriterQuery {
   id: string;
   keyword: string;
-  status: string; // any status string — no longer restricted
+  status: string;
   language?: string;
   engine?: string;
   source?: string;
@@ -96,9 +93,6 @@ const INITIAL_RETRY_DELAY_MS = 1000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SESSION-LEVEL DEDUP MAP
-// Persists across all calls within the same browser session.
-// key = normalized keyword, value = { queryId, createdAt }
-// This is the PRIMARY guard against duplicate query creation.
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface SessionEntry {
@@ -142,18 +136,13 @@ export class NeuronWriterService {
   // KEYWORD CLEANING
   // ─────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Convert any keyword format to clean human-readable lowercase.
-   * "best-running-shoes-2024" → "best running shoes"
-   * "meal_replacement_plans" → "meal replacement plans"
-   */
   static cleanKeyword(raw: string): string {
     return raw
       .toLowerCase()
-      .replace(/[-_]+/g, ' ')           // slug → spaces
-      .replace(/\b\d{4}\b/g, '')        // strip years
-      .replace(/[^a-z0-9\s]/g, '')      // strip punctuation
-      .replace(/\s+/g, ' ')             // collapse whitespace
+      .replace(/[-_]+/g, ' ')
+      .replace(/\b\d{4}\b/g, '')
+      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/\s+/g, ' ')
       .trim();
   }
 
@@ -280,7 +269,6 @@ export class NeuronWriterService {
       }
     }
 
-    // All proxies failed — retry on transient errors
     if (retryCount < MAX_RETRIES) {
       const hasTransient = errors.some(
         (e) => e.includes('timeout') || e.includes('network') || e.includes('500') || e.includes('503')
@@ -338,11 +326,7 @@ export class NeuronWriterService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // PUBLIC API: FIND QUERY BY KEYWORD — v5.0 DEFINITIVE FIX
-  //
-  // KEY CHANGE: Accepts ALL statuses including "in_progress" and "pending".
-  // The old code SKIPPED these — causing the duplicate creation loop.
-  // Now: if a query exists with ANY status for this keyword → return it.
+  // PUBLIC API: FIND QUERY BY KEYWORD
   // ─────────────────────────────────────────────────────────────────────────
 
   async findQueryByKeyword(
@@ -350,7 +334,6 @@ export class NeuronWriterService {
     keyword: string
   ): Promise<{ success: boolean; query?: NeuronWriterQuery; error?: string }> {
     try {
-      // ── STEP 0: Session cache check (fastest, prevents all duplicate calls) ──
       const sessionKey = this.getSessionKey(keyword);
       const sessionHit = SESSION_DEDUP_MAP.get(sessionKey);
       if (sessionHit) {
@@ -368,7 +351,6 @@ export class NeuronWriterService {
         };
       }
 
-      // ── STEP 1: Fetch all queries from NeuronWriter ──────────────────────
       const res = await this.callProxy('/list-queries', { project: projectId });
       if (!res.success) return { success: false, error: res.error };
 
@@ -387,7 +369,6 @@ export class NeuronWriterService {
         '" (normalized: "' + searchNorm + '") — ALL statuses accepted'
       );
 
-      // ── STEP 2: Score every query (ALL statuses — including in_progress) ─
       let bestMatch: { raw: any; score: number } | null = null;
 
       for (const q of rawList) {
@@ -397,16 +378,11 @@ export class NeuronWriterService {
         const qNorm = this.normalize(qKeyword);
         let score = 0;
 
-        // Exact normalized match → highest score
         if (qNorm === searchNorm) {
           score = 100;
-        }
-        // One contains the other
-        else if (qNorm.includes(searchNorm) || searchNorm.includes(qNorm)) {
+        } else if (qNorm.includes(searchNorm) || searchNorm.includes(qNorm)) {
           score = 80;
-        }
-        // Jaccard token overlap ≥ 50%
-        else {
+        } else {
           const qWords = new Set(qNorm.split(' ').filter(Boolean));
           const sWords = new Set(searchNorm.split(' ').filter(Boolean));
           const intersection = [...qWords].filter((w) => sWords.has(w)).length;
@@ -432,7 +408,6 @@ export class NeuronWriterService {
           ' status=' + status + ' (match score=' + bestMatch.score + ')'
         );
 
-        // ── Register in session cache to prevent future duplicates ──────────
         SESSION_DEDUP_MAP.set(sessionKey, {
           queryId,
           keyword: q.keyword,
@@ -464,10 +439,7 @@ export class NeuronWriterService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // PUBLIC API: CREATE QUERY — v5.0 DEDUP GUARD
-  //
-  // ONLY called when findQueryByKeyword returns nothing.
-  // ALWAYS registers result in SESSION_DEDUP_MAP before returning.
+  // PUBLIC API: CREATE QUERY
   // ─────────────────────────────────────────────────────────────────────────
 
   async createQuery(
@@ -478,7 +450,6 @@ export class NeuronWriterService {
       const cleanKw = NeuronWriterService.cleanKeyword(keyword);
       const sessionKey = this.getSessionKey(keyword);
 
-      // ── GUARD: If already in session cache, NEVER create a new one ────────
       const sessionHit = SESSION_DEDUP_MAP.get(sessionKey);
       if (sessionHit) {
         this.diagWarn(
@@ -508,7 +479,6 @@ export class NeuronWriterService {
 
       this.diagSuccess('Created NEW query ID=' + queryId + ' for "' + cleanKw + '"');
 
-      // Register in session cache immediately
       SESSION_DEDUP_MAP.set(sessionKey, {
         queryId,
         keyword: cleanKw,
@@ -526,7 +496,6 @@ export class NeuronWriterService {
 
   // ─────────────────────────────────────────────────────────────────────────
   // PUBLIC API: GET QUERY ANALYSIS
-  // Returns retryable error if in_progress (no throw)
   // ─────────────────────────────────────────────────────────────────────────
 
   async getQueryAnalysis(queryId: string): Promise<{
@@ -559,7 +528,6 @@ export class NeuronWriterService {
         headingsH3: this.parseHeadings(data.headingsH3 || data.headings_h3 || []),
       };
 
-      // Not ready yet — return retryable error (do NOT throw)
       if (!analysis.terms?.length && !analysis.headingsH2?.length) {
         const isProcessing =
           status === 'in_progress' || status === 'pending' || status === 'processing' ||
@@ -660,7 +628,6 @@ export class NeuronWriterService {
     return Math.min(100, Math.round((matched / terms.length) * 100));
   }
 
-  // FIX: join with '\n' (was broken '\\n')
   formatTermsForPrompt(
     terms: Array<{ term: string; type?: string; usage_pc?: number }>,
     analysis: NeuronWriterAnalysis
@@ -732,7 +699,6 @@ export class NeuronWriterService {
     );
     sections.push('</neuronwriter_optimization>');
 
-    // FIX: was '\\n' (broken literal backslash-n)
     return sections.join('\n');
   }
 
@@ -762,7 +728,7 @@ export class NeuronWriterService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // SESSION CACHE UTILS (for debugging / manual reset)
+  // SESSION CACHE UTILS
   // ─────────────────────────────────────────────────────────────────────────
 
   static getSessionCacheSize(): number {
@@ -779,9 +745,10 @@ export class NeuronWriterService {
   }
 
   /**
-   * Remove a SINGLE keyword from the session dedup cache.
-   * Used when the orchestrator detects a permanently broken query
-   * and needs to force-create a replacement.
+   * v5.1: Remove a SINGLE keyword from the session dedup cache.
+   * Called by the orchestrator when it detects a permanently broken query
+   * (ready but zero terms) and needs to force-create a genuine replacement.
+   * Without this, createQuery() sees the cached broken ID and returns it again.
    */
   static removeSessionEntry(keyword: string): boolean {
     const normalized = NeuronWriterService.cleanKeyword(keyword);
@@ -792,8 +759,6 @@ export class NeuronWriterService {
     return deleted;
   }
 }
-
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LIVE SCORING
