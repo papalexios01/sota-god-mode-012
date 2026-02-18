@@ -165,7 +165,7 @@ function convertMarkdownToHTML(content: string): string {
   html = html.replace(/^####\s+(.+)$/gm, '<h4 style="color:#334155;font-size:19px;font-weight:700;margin:32px 0 12px 0;line-height:1.3">$1</h4>');
   html = html.replace(/^###\s+(.+)$/gm, '<h3 style="color:#1e293b;font-size:23px;font-weight:800;margin:40px 0 16px 0;letter-spacing:-0.02em;line-height:1.3">$1</h3>');
   html = html.replace(/^##\s+(.+)$/gm, '<h2 style="color:#0f172a;font-size:30px;font-weight:900;margin:56px 0 24px 0;padding-bottom:14px;border-bottom:4px solid #10b981;letter-spacing:-0.025em;line-height:1.2">$1</h2>');
-    // ✅ FIX: Do NOT generate H1 tags. WordPress uses the post title as H1.
+  // ✅ FIX: Do NOT generate H1 tags. WordPress uses the post title as H1.
   // Having a second H1 in the content body hurts SEO and accessibility.
   // Convert # headings to H2 instead.
   html = html.replace(/^#\s+(.+)$/gm, '<h2 style="color:#0f172a;font-size:30px;font-weight:900;margin:56px 0 24px 0;padding-bottom:14px;border-bottom:4px solid #10b981;letter-spacing:-0.025em;line-height:1.2">$1</h2>');
@@ -562,7 +562,7 @@ export class EnterpriseContentOrchestrator {
     if (!apiKey || !projectId) {
       this.log(
         'NeuronWriter SKIPPED — ' +
-          (!apiKey ? 'API key MISSING' : 'Project ID MISSING')
+        (!apiKey ? 'API key MISSING' : 'Project ID MISSING')
       );
       return null;
     }
@@ -582,7 +582,7 @@ export class EnterpriseContentOrchestrator {
           queryId = searchResult.query.id;
           this.log(
             'NeuronWriter: Found existing query ID=' + queryId +
-              ' status=' + (searchResult.query.status || 'unknown')
+            ' status=' + (searchResult.query.status || 'unknown')
           );
         }
       } catch (e) {
@@ -606,15 +606,15 @@ export class EnterpriseContentOrchestrator {
 
           // ✅ FIX: "Ready but empty" — this query is PERMANENTLY broken.
           // Don't poll it 39 more times. Force a new query.
-                this.warn(
-        'NeuronWriter: Query ' + queryId + ' is READY but has ZERO terms/headings. ' +
-        'This query is permanently broken. Creating a replacement...'
-      );
+          this.warn(
+            'NeuronWriter: Query ' + queryId + ' is READY but has ZERO terms/headings. ' +
+            'This query is permanently broken. Creating a replacement...'
+          );
 
-      // ✅ FIX: Clear session cache so createQuery() doesn't return the broken ID
-      NeuronWriterService.removeSessionEntry(nwKeyword);
+          // ✅ FIX: Clear session cache so createQuery() doesn't return the broken ID
+          NeuronWriterService.removeSessionEntry(nwKeyword);
 
-      queryId = '';
+          queryId = '';
 
           // Fall through to Step 3 to create a new query
         }
@@ -648,6 +648,15 @@ export class EnterpriseContentOrchestrator {
     //    For replacement queries: bail quickly if also empty (max 10 polls)
     //    For brand-new queries: standard patience (max 40 polls)
     const maxAttempts = isReplacementQuery ? 10 : NW_MAX_POLL_ATTEMPTS;
+
+    // ✅ FIX: New queries need time to process. Wait before first poll.
+    // NeuronWriter analysis takes 30-120 seconds minimum. Polling instantly
+    // returns a false "ready" with zero terms.
+    if (isReplacementQuery || !options.neuronWriterQueryId) {
+      this.log('NeuronWriter: Waiting 30s for new query to be analyzed...');
+      await this.sleep(30000);
+    }
+
     let consecutiveEmptyReady = 0;
     const MAX_CONSECUTIVE_EMPTY_READY = 3;
 
@@ -684,16 +693,16 @@ export class EnterpriseContentOrchestrator {
 
           this.log(
             'NeuronWriter: Analysis empty (ready-but-empty count: ' +
-              consecutiveEmptyReady + '/' + MAX_CONSECUTIVE_EMPTY_READY +
-              ') — attempt ' + attempt + '/' + maxAttempts
+            consecutiveEmptyReady + '/' + MAX_CONSECUTIVE_EMPTY_READY +
+            ') — attempt ' + attempt + '/' + maxAttempts
           );
         } else {
           // Not ready yet — reset the empty counter since it's still processing
           consecutiveEmptyReady = 0;
           this.log(
             'NeuronWriter: Not ready yet (' +
-              (res.error ?? 'no data') + ') — attempt ' +
-              attempt + '/' + maxAttempts
+            (res.error ?? 'no data') + ') — attempt ' +
+            attempt + '/' + maxAttempts
           );
         }
       } catch (pollErr) {
@@ -705,15 +714,15 @@ export class EnterpriseContentOrchestrator {
 
       const delayMs =
         attempt <= 3 ? 2000 :
-        attempt <= 10 ? 4000 :
-        attempt <= 20 ? 6000 : 8000;
+          attempt <= 10 ? 4000 :
+            attempt <= 20 ? 6000 : 8000;
 
       await this.sleep(delayMs);
     }
 
     this.warn(
       'NeuronWriter: Analysis timed out after ' + maxAttempts +
-        ' attempts — proceeding WITHOUT NeuronWriter'
+      ' attempts — proceeding WITHOUT NeuronWriter'
     );
     return null;
   }
@@ -1339,7 +1348,7 @@ Output ONLY the HTML paragraphs, nothing else.`;
     let finalItems = Array.from(dedup.values());
     finalItems.sort((a, b) => {
       return this.getReferenceAuthorityScore(b.domain, b.type) -
-             this.getReferenceAuthorityScore(a.domain, a.type);
+        this.getReferenceAuthorityScore(a.domain, a.type);
     });
     finalItems = finalItems.slice(0, 12);
 
@@ -1646,9 +1655,9 @@ Return the COMPLETE article with humanized voice. Preserve ALL HTML structure ex
 
 
 
-  
 
-  
+
+
   // ─────────────────────────────────────────────────────────────────────────
   // MAIN GENERATION ENTRY POINT
   // ─────────────────────────────────────────────────────────────────────────
@@ -1720,7 +1729,7 @@ Return the COMPLETE article with humanized voice. Preserve ALL HTML structure ex
     const phase1Ms = endPhase1Timer();
     this.log(
       `Phase 1 complete in ${(phase1Ms / 1000).toFixed(1)}s — ` +
-        `${videos.length} videos, ${references.length} references`
+      `${videos.length} videos, ${references.length} references`
     );
     this.log(
       `SERP: intent="${serpAnalysis.userIntent}", recommended=${serpAnalysis.recommendedWordCount} words`
@@ -1729,7 +1738,7 @@ Return the COMPLETE article with humanized voice. Preserve ALL HTML structure ex
       !!this.config.neuronWriterApiKey && !!this.config.neuronWriterProjectId;
     this.log(
       `NeuronWriter: ${neuron ? 'ACTIVE' : 'INACTIVE — content will proceed without NW optimization'}` +
-        (nwConfigured && !neuron ? ' (configured but init failed)' : '')
+      (nwConfigured && !neuron ? ' (configured but init failed)' : '')
     );
 
     // ── Phase 2: AI Content Generation ─────────────────────────────────────────
@@ -1784,7 +1793,7 @@ Return the COMPLETE article with humanized voice. Preserve ALL HTML structure ex
       } else {
         const initialMaxTokens =
           targetWordCount > 5000 ? 32768 :
-          targetWordCount > 3000 ? 16384 : 8192;
+            targetWordCount > 3000 ? 16384 : 8192;
         result = await this.engine.generateWithModel({
           prompt: userPrompt,
           model: this.config.primaryModel ?? 'gemini',
@@ -1800,7 +1809,7 @@ Return the COMPLETE article with humanized voice. Preserve ALL HTML structure ex
       this.logError('AI content generation failed: ' + msg);
       throw new Error(
         'AI content generation failed: ' + msg +
-          '. Check your API key and model configuration.'
+        '. Check your API key and model configuration.'
       );
     }
 
@@ -1842,7 +1851,7 @@ Return the COMPLETE article with humanized voice. Preserve ALL HTML structure ex
     const phase2Ms = endPhase2Timer();
     this.log(
       'Phase 2 complete in ' + (phase2Ms / 1000).toFixed(1) + 's — ' +
-        this.countWordsFromHtml(content) + ' words generated'
+      this.countWordsFromHtml(content) + ' words generated'
     );
 
     // ── Phase 3: Post-Processing Pipeline ──────────────────────────────────
@@ -1940,7 +1949,7 @@ Return the COMPLETE article with humanized voice. Preserve ALL HTML structure ex
       this.log('3h-b: Humanization complete');
     } catch (e) { this.warn(`3h-b: Humanization failed (non-fatal): ${e}`); }
 
-    
+
 
     // 3i: HTML structure enforcement
     try {
@@ -2156,24 +2165,24 @@ Return the COMPLETE article with humanized voice. Preserve ALL HTML structure ex
       neuronWriterQueryId: neuron?.queryId ?? undefined,
       neuronWriterAnalysis: neuron
         ? {
-            ...neuron.analysis,
-            queryid: neuron.queryId,
-            status: 'ready',
-          }
+          ...neuron.analysis,
+          queryid: neuron.queryId,
+          status: 'ready',
+        }
         : (this.config.neuronWriterApiKey && this.config.neuronWriterProjectId
           ? {
-              // ✅ FIX: Provide status info even when NW init failed,
-              // so the UI can show "configured but failed" instead of "Not Connected"
-              status: 'failed',
-              keyword: options.keyword,
-              content_score: 0,
-              terms: [],
-              termsExtended: [],
-              entities: [],
-              headingsH2: [],
-              headingsH3: [],
-              _failReason: 'NeuronWriter query returned no data. Delete the broken query in NeuronWriter dashboard and retry.',
-            }
+            // ✅ FIX: Provide status info even when NW init failed,
+            // so the UI can show "configured but failed" instead of "Not Connected"
+            status: 'failed',
+            keyword: options.keyword,
+            content_score: 0,
+            terms: [],
+            termsExtended: [],
+            entities: [],
+            headingsH2: [],
+            headingsH3: [],
+            _failReason: 'NeuronWriter query returned no data. Delete the broken query in NeuronWriter dashboard and retry.',
+          }
           : undefined),
 
       postProcessing: {

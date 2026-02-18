@@ -106,6 +106,7 @@ export function useGodModeEngine() {
     serperApiKey: appConfig.serperApiKey,
     openrouterModelId: appConfig.openrouterModelId,
     groqModelId: appConfig.groqModelId,
+    fallbackModels: appConfig.fallbackModels || [],
   }), [appConfig]);
 
   /**
@@ -124,8 +125,8 @@ export function useGodModeEngine() {
     }
 
     const hasApiKey = appConfig.geminiApiKey || appConfig.openaiApiKey ||
-                      appConfig.anthropicApiKey || appConfig.openrouterApiKey ||
-                      appConfig.groqApiKey;
+      appConfig.anthropicApiKey || appConfig.openrouterApiKey ||
+      appConfig.groqApiKey;
 
     if (!hasApiKey) {
       throw new Error('No AI API key configured. Please add at least one API key in Setup.');

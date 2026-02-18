@@ -72,6 +72,7 @@ const DEFAULT_MODEL_CONFIGS: Record<AIModel, ModelConfig> = {
 export interface ExtendedAPIKeys extends APIKeys {
   openrouterModelId?: string;
   groqModelId?: string;
+  fallbackModels?: string[]; // Ordered list of model keys to try if primary fails
 }
 
 /** Maximum retries for transient API errors (429, 500, 503) */
@@ -166,6 +167,7 @@ export class SOTAContentGenerationEngine {
       return RETRYABLE_STATUS_CODES.some(code => msg.includes(String(code))) ||
         msg.includes('ECONNRESET') ||
         msg.includes('ETIMEDOUT') ||
+        msg.includes('ERR_HTTP2_PROTOCOL_ERROR') ||
         msg.includes('fetch failed');
     }
     return false;
@@ -251,6 +253,34 @@ export class SOTAContentGenerationEngine {
     }
 
     this.log(`Error with ${model} after ${MAX_RETRIES + 1} attempts: ${lastError}`);
+
+    // ✅ FALLBACK MODELS: If primary fails, try fallback models in order
+    const fallbackModels = (this.apiKeys.fallbackModels || []) as string[];
+    if (fallbackModels.length > 0) {
+      for (const fallbackKey of fallbackModels) {
+        const fallbackModel = fallbackKey as AIModel;
+        if (fallbackModel === model) continue; // Skip the model that just failed
+        const fallbackApiKey = this.getApiKey(fallbackModel);
+        if (!fallbackApiKey) {
+          this.log(`Fallback ${fallbackModel}: no API key configured, skipping`);
+          continue;
+        }
+        this.log(`🔄 Trying fallback model: ${fallbackModel}...`);
+        try {
+          const fallbackResult = await this.generateWithModel({
+            ...params,
+            model: fallbackModel,
+          });
+          this.log(`✅ Fallback model ${fallbackModel} succeeded!`);
+          return fallbackResult;
+        } catch (fallbackErr) {
+          this.log(`❌ Fallback ${fallbackModel} also failed: ${fallbackErr}`);
+          continue;
+        }
+      }
+      this.log(`All fallback models exhausted. No generation possible.`);
+    }
+
     throw lastError;
   }
 

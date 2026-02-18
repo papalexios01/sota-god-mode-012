@@ -510,8 +510,17 @@ export class NeuronWriterService {
       const data = res.data as any;
       const status = (data.status || '').toLowerCase();
 
-      const parsedTerms = this.parseTerms(data.terms || data.basicKeywords || []);
-      const parsedTermsExtended = this.parseTerms(data.termsExtended || data.extendedKeywords || []);
+      // ✅ DIAGNOSTIC: Log the RAW response to find where terms actually are
+      console.log('[NeuronWriter] RAW /get-query response keys:', Object.keys(data || {}));
+      console.log('[NeuronWriter] RAW response status:', data?.status);
+      console.log('[NeuronWriter] RAW terms field:', data?.terms ? `${data.terms.length} items` : 'MISSING');
+      console.log('[NeuronWriter] RAW basicKeywords:', data?.basicKeywords ? `${data.basicKeywords.length} items` : 'MISSING');
+      console.log('[NeuronWriter] RAW recommendations:', data?.recommendations ? Object.keys(data.recommendations) : 'MISSING');
+      console.log('[NeuronWriter] RAW content_ideas:', data?.content_ideas ? 'PRESENT' : 'MISSING');
+      console.log('[NeuronWriter] RAW data sample:', JSON.stringify(data).substring(0, 500));
+
+      const parsedTerms = this.parseTerms(data.terms || data.basicKeywords || data?.recommendations?.terms || []);
+      const parsedTermsExtended = this.parseTerms(data.termsExtended || data.extendedKeywords || data?.recommendations?.termsExtended || []);
 
       const analysis: NeuronWriterAnalysis = {
         query_id: queryId,

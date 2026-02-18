@@ -309,6 +309,52 @@ export function SetupConfig() {
             </div>
           )}
 
+          {/* Fallback Models */}
+          <div className="p-4 bg-background/50 border border-border rounded-xl space-y-3">
+            <label className="block text-sm font-medium text-foreground">Fallback Models (tried in order if primary fails)</label>
+            <p className="text-xs text-muted-foreground">If the primary model fails (e.g., ERR_HTTP2_PROTOCOL_ERROR), these models are tried automatically in order. Only models with configured API keys are available.</p>
+            <div className="flex flex-wrap gap-2 mt-2">
+              {[
+                { key: 'gemini', label: 'Gemini', hasKey: !!config.geminiApiKey },
+                { key: 'openai', label: 'OpenAI', hasKey: !!config.openaiApiKey },
+                { key: 'anthropic', label: 'Anthropic', hasKey: !!config.anthropicApiKey },
+                { key: 'openrouter', label: 'OpenRouter', hasKey: !!config.openrouterApiKey },
+                { key: 'groq', label: 'Groq', hasKey: !!config.groqApiKey },
+              ]
+                .filter(m => m.key !== config.primaryModel && m.hasKey)
+                .map(m => {
+                  const isSelected = (config.fallbackModels || []).includes(m.key);
+                  const currentFallbacks = config.fallbackModels || [];
+                  return (
+                    <button
+                      key={m.key}
+                      onClick={() => {
+                        if (isSelected) {
+                          setConfig({ fallbackModels: currentFallbacks.filter(f => f !== m.key) });
+                        } else {
+                          setConfig({ fallbackModels: [...currentFallbacks, m.key] });
+                        }
+                      }}
+                      className={cn(
+                        "px-3 py-1.5 rounded-lg text-sm font-medium transition-all border",
+                        isSelected
+                          ? "bg-primary/20 border-primary/50 text-primary"
+                          : "bg-background/30 border-border/50 text-muted-foreground hover:border-border"
+                      )}
+                    >
+                      {isSelected ? <Check className="w-3 h-3 inline mr-1" /> : null}
+                      {m.label}
+                    </button>
+                  );
+                })}
+            </div>
+            {(config.fallbackModels || []).length > 0 && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Fallback order: {(config.fallbackModels || []).map((f, i) => <span key={f}>{i > 0 ? ' → ' : ''}<code className="text-primary">{f}</code></span>)}
+              </p>
+            )}
+          </div>
+
           <label className="flex items-center gap-3 cursor-pointer">
             <input type="checkbox" checked={config.enableGoogleGrounding} onChange={(e) => setConfig({ enableGoogleGrounding: e.target.checked })} className="w-5 h-5 rounded border-border text-primary focus:ring-primary/50" />
             <span className="text-sm text-foreground">Enable Google Search Grounding</span>

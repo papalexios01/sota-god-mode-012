@@ -89,6 +89,7 @@ export interface GodModeEngineOptions {
     serperApiKey?: string;
     openrouterModelId?: string;
     groqModelId?: string;
+    fallbackModels?: string[];
   };
 }
 
@@ -256,6 +257,7 @@ export class GodModeEngine {
         serperApiKey: appConfig.serperApiKey ?? '',
         openrouterModelId: appConfig.openrouterModelId,
         groqModelId: appConfig.groqModelId,
+        fallbackModels: appConfig.fallbackModels || [],
       },
       organizationName: appConfig.organizationName ?? 'Content Hub',
       organizationUrl: appConfig.wpUrl ?? 'https://example.com',
@@ -266,14 +268,14 @@ export class GodModeEngine {
       // FIX: Always pass NW credentials regardless of flag (failsafe)
       neuronWriterApiKey:
         appConfig.enableNeuronWriter &&
-        appConfig.neuronWriterApiKey &&
-        appConfig.neuronWriterApiKey.length > 10
+          appConfig.neuronWriterApiKey &&
+          appConfig.neuronWriterApiKey.length > 10
           ? appConfig.neuronWriterApiKey
           : undefined,
       neuronWriterProjectId:
         appConfig.enableNeuronWriter &&
-        appConfig.neuronWriterApiKey &&
-        appConfig.neuronWriterApiKey.length > 10
+          appConfig.neuronWriterApiKey &&
+          appConfig.neuronWriterApiKey.length > 10
           ? appConfig.neuronWriterProjectId
           : undefined,
     });

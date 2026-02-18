@@ -121,6 +121,7 @@ export interface AppConfig {
   neuronWriterApiKey: string;
   neuronWriterProjectId: string;
   neuronWriterProjectName: string;
+  fallbackModels: string[]; // Ordered list of fallback model keys tried if primary fails
   enableGeoTargeting: boolean;
   targetCountry: string;
   targetLanguage: string;
@@ -311,6 +312,7 @@ export const useOptimizerStore = create<OptimizerStore>()(
         neuronWriterApiKey: '',
         neuronWriterProjectId: '',
         neuronWriterProjectName: '',
+        fallbackModels: [],
         enableGeoTargeting: false,
         targetCountry: 'US',
         targetLanguage: 'en',
