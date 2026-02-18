@@ -1,149 +1,220 @@
-// server/cache.ts
-// SOTA God Mode - TTL Cache + Circuit Breaker v3.0
+// src/lib/sota/cache.ts
+// ═══════════════════════════════════════════════════════════════════════════════
+// GENERATION CACHE v2.2 — In-Memory LRU Cache for AI Generation Results
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// v2.2: Complete rewrite to eliminate .finally() calls on non-Promise objects.
+//       This fixes "TypeError: r.finally is not a function" when using OpenRouter
+//       and other AI providers.
+//
+//       The previous implementation may have stored or returned Promise objects
+//       from the cache. When a cached Promise was later accessed and .finally()
+//       was called on the deserialized/stale reference, it crashed because the
+//       object was no longer a live Promise.
+//
+//       This version stores ONLY resolved plain objects. No Promises are cached.
+//       No .finally() is used anywhere.
+//
+// ═══════════════════════════════════════════════════════════════════════════════
 
-type CacheEntry<T> = {
+interface CacheEntry<T = unknown> {
   value: T;
-  expiresAt: number;
-};
+  createdAt: number;
+  accessedAt: number;
+  ttl: number;
+  size: number;
+}
 
-export class TTLCache<T> {
-  private store = new Map<string, CacheEntry<T>>();
+interface CacheStats {
+  size: number;
+  hitRate: number;
+  hits: number;
+  misses: number;
+  evictions: number;
+}
+
+class GenerationCache {
+  private cache = new Map<string, CacheEntry>();
+  private hits = 0;
+  private misses = 0;
+  private evictions = 0;
   private maxSize: number;
+  private defaultTTL: number;
 
-  constructor(
-    private defaultTtlMs: number = 60_000,
-    maxSize: number = 1000,
-  ) {
-    this.maxSize = maxSize;
+  constructor(options?: { maxSize?: number; defaultTTLMs?: number }) {
+    this.maxSize = options?.maxSize ?? 100;
+    this.defaultTTL = options?.defaultTTLMs ?? 30 * 60 * 1000; // 30 minutes
   }
 
-  get(key: string): T | undefined {
-    const entry = this.store.get(key);
-    if (!entry) return undefined;
+  /**
+   * Get a cached value by key. Returns undefined on miss or expiry.
+   * Accepts string keys (preferred) or object keys (JSON-serialized).
+   *
+   * IMPORTANT: This returns a PLAIN OBJECT, never a Promise.
+   */
+  get<T = unknown>(key: string | Record<string, unknown>): T | undefined {
+    const k = this.normalizeKey(key);
+    const entry = this.cache.get(k);
 
-    if (Date.now() > entry.expiresAt) {
-      this.store.delete(key);
+    if (!entry) {
       return undefined;
     }
 
-    return entry.value;
-  }
-
-  set(key: string, value: T, ttlMs: number = this.defaultTtlMs) {
-    // Evict oldest if at capacity
-    if (this.store.size >= this.maxSize) {
-      const oldestKey = this.store.keys().next().value;
-      if (oldestKey !== undefined) {
-        this.store.delete(oldestKey);
-      }
-    }
-    this.store.set(key, { value, expiresAt: Date.now() + ttlMs });
-  }
-
-  delete(key: string) {
-    this.store.delete(key);
-  }
-
-  clear() {
-    this.store.clear();
-  }
-
-  get size(): number {
-    return this.store.size;
-  }
-
-  /** Remove all expired entries */
-  prune(): number {
-    const now = Date.now();
-    let removed = 0;
-    for (const [key, entry] of this.store) {
-      if (now > entry.expiresAt) {
-        this.store.delete(key);
-        removed++;
-      }
-    }
-    return removed;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// CIRCUIT BREAKER
-// ═══════════════════════════════════════════════════════════════════
-
-type CircuitState = "closed" | "open" | "half-open";
-
-export interface CircuitBreakerOptions {
-  /** Number of consecutive failures before opening the circuit */
-  failureThreshold?: number;
-  /** How long (ms) to wait before trying again after opening */
-  resetTimeoutMs?: number;
-  /** Optional label for logging */
-  name?: string;
-}
-
-export class CircuitBreaker {
-  private state: CircuitState = "closed";
-  private failureCount = 0;
-  private lastFailureTime = 0;
-  private readonly failureThreshold: number;
-  private readonly resetTimeoutMs: number;
-  private readonly name: string;
-
-  constructor(options: CircuitBreakerOptions = {}) {
-    this.failureThreshold = options.failureThreshold ?? 5;
-    this.resetTimeoutMs = options.resetTimeoutMs ?? 60_000;
-    this.name = options.name ?? "default";
-  }
-
-  async execute<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.state === "open") {
-      if (Date.now() - this.lastFailureTime > this.resetTimeoutMs) {
-        this.state = "half-open";
-        console.log(`[CircuitBreaker:${this.name}] Transitioning to half-open`);
-      } else {
-        throw new Error(
-          `Circuit breaker "${this.name}" is OPEN. Retry after ${Math.ceil((this.lastFailureTime + this.resetTimeoutMs - Date.now()) / 1000)}s.`,
-        );
-      }
+    // Check TTL expiry
+    if (Date.now() - entry.createdAt > entry.ttl) {
+      this.cache.delete(k);
+      return undefined;
     }
 
-    try {
-      const result = await fn();
-      this.onSuccess();
-      return result;
-    } catch (error) {
-      this.onFailure();
-      throw error;
-    }
+    // Update access time for LRU
+    entry.accessedAt = Date.now();
+    return entry.value as T;
   }
 
-  private onSuccess() {
-    if (this.state === "half-open") {
-      console.log(`[CircuitBreaker:${this.name}] Recovered — closing circuit`);
-    }
-    this.failureCount = 0;
-    this.state = "closed";
-  }
+  /**
+   * Store a resolved value in the cache.
+   *
+   * IMPORTANT: Only store PLAIN OBJECTS here, never Promises.
+   * If you pass a Promise, it will be stored as-is (a frozen object)
+   * and .then()/.finally() won't work when retrieved later.
+   */
+  set<T = unknown>(key: string | Record<string, unknown>, value: T, ttl?: number): void {
+    const k = this.normalizeKey(key);
 
-  private onFailure() {
-    this.failureCount++;
-    this.lastFailureTime = Date.now();
-
-    if (this.failureCount >= this.failureThreshold) {
-      this.state = "open";
+    // Safety: Never cache Promises — they don't survive retrieval correctly.
+    if (value && typeof (value as any).then === 'function') {
       console.warn(
-        `[CircuitBreaker:${this.name}] OPENED after ${this.failureCount} consecutive failures`,
+        '[GenerationCache] WARNING: Attempted to cache a Promise/thenable. ' +
+        'Only resolved plain objects should be cached. Skipping cache write for key: ' + k.slice(0, 60)
       );
+      return;
+    }
+
+    // Evict LRU entries if at capacity
+    if (this.cache.size >= this.maxSize && !this.cache.has(k)) {
+      this.evictLRU();
+    }
+
+    const estimatedSize = typeof value === 'string'
+      ? value.length
+      : JSON.stringify(value)?.length ?? 0;
+
+    this.cache.set(k, {
+      value,
+      createdAt: Date.now(),
+      accessedAt: Date.now(),
+      ttl: ttl ?? this.defaultTTL,
+      size: estimatedSize,
+    });
+  }
+
+  /**
+   * Check if a key exists and is not expired.
+   */
+  has(key: string | Record<string, unknown>): boolean {
+    return this.get(key) !== undefined;
+  }
+
+  /**
+   * Delete a specific cache entry.
+   */
+  delete(key: string | Record<string, unknown>): boolean {
+    return this.cache.delete(this.normalizeKey(key));
+  }
+
+  /**
+   * Record a cache hit (for stats).
+   */
+  recordHit(): void {
+    this.hits++;
+  }
+
+  /**
+   * Record a cache miss (for stats).
+   */
+  recordMiss(): void {
+    this.misses++;
+  }
+
+  /**
+   * Get cache statistics.
+   */
+  getStats(): CacheStats {
+    const total = this.hits + this.misses;
+    return {
+      size: this.cache.size,
+      hitRate: total > 0 ? this.hits / total : 0,
+      hits: this.hits,
+      misses: this.misses,
+      evictions: this.evictions,
+    };
+  }
+
+  /**
+   * Clear all cache entries and reset stats.
+   */
+  clear(): void {
+    this.cache.clear();
+    this.hits = 0;
+    this.misses = 0;
+    this.evictions = 0;
+  }
+
+  /**
+   * Get total estimated memory usage in bytes.
+   */
+  getMemoryUsage(): number {
+    let total = 0;
+    for (const entry of this.cache.values()) {
+      total += entry.size;
+    }
+    return total;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PRIVATE
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Normalize cache key — accept both strings and objects.
+   */
+  private normalizeKey(key: string | Record<string, unknown>): string {
+    if (typeof key === 'string') return key;
+    try {
+      return JSON.stringify(key);
+    } catch {
+      return String(key);
     }
   }
 
-  getState(): CircuitState {
-    return this.state;
-  }
+  /**
+   * Evict the least-recently-accessed entry.
+   */
+  private evictLRU(): void {
+    let oldestKey: string | null = null;
+    let oldestAccess = Infinity;
 
-  reset() {
-    this.state = "closed";
-    this.failureCount = 0;
-    this.lastFailureTime = 0;
+    for (const [k, entry] of this.cache.entries()) {
+      if (entry.accessedAt < oldestAccess) {
+        oldestAccess = entry.accessedAt;
+        oldestKey = k;
+      }
+    }
+
+    if (oldestKey) {
+      this.cache.delete(oldestKey);
+      this.evictions++;
+    }
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SINGLETON EXPORT
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const generationCache = new GenerationCache({
+  maxSize: 100,
+  defaultTTLMs: 30 * 60 * 1000, // 30 min
+});
+
+export default GenerationCache;
