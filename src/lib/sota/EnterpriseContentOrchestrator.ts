@@ -165,7 +165,11 @@ function convertMarkdownToHTML(content: string): string {
   html = html.replace(/^####\s+(.+)$/gm, '<h4 style="color:#334155;font-size:19px;font-weight:700;margin:32px 0 12px 0;line-height:1.3">$1</h4>');
   html = html.replace(/^###\s+(.+)$/gm, '<h3 style="color:#1e293b;font-size:23px;font-weight:800;margin:40px 0 16px 0;letter-spacing:-0.02em;line-height:1.3">$1</h3>');
   html = html.replace(/^##\s+(.+)$/gm, '<h2 style="color:#0f172a;font-size:30px;font-weight:900;margin:56px 0 24px 0;padding-bottom:14px;border-bottom:4px solid #10b981;letter-spacing:-0.025em;line-height:1.2">$1</h2>');
-  html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
+    // ✅ FIX: Do NOT generate H1 tags. WordPress uses the post title as H1.
+  // Having a second H1 in the content body hurts SEO and accessibility.
+  // Convert # headings to H2 instead.
+  html = html.replace(/^#\s+(.+)$/gm, '<h2 style="color:#0f172a;font-size:30px;font-weight:900;margin:56px 0 24px 0;padding-bottom:14px;border-bottom:4px solid #10b981;letter-spacing:-0.025em;line-height:1.2">$1</h2>');
+
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
   html = html.replace(/_(.+?)_/g, '<em>$1</em>');
@@ -224,6 +228,8 @@ function ensureProperHTMLStructure(content: string): string {
   html = html.replace(/<h2(?![^>]*style)([^>]*)>/g, '<h2 style="color:#0f172a;font-size:30px;font-weight:900;margin:56px 0 24px 0;padding-bottom:14px;border-bottom:4px solid #10b981;letter-spacing:-0.025em;line-height:1.2"$1>');
   html = html.replace(/<h3(?![^>]*style)([^>]*)>/g, '<h3 style="color:#1e293b;font-size:23px;font-weight:800;margin:40px 0 16px 0;letter-spacing:-0.02em;line-height:1.3"$1>');
   html = html.replace(/<h4(?![^>]*style)([^>]*)>/g, '<h4 style="color:#334155;font-size:19px;font-weight:700;margin:32px 0 12px 0;line-height:1.3"$1>');
+  // ✅ FIX: Strip any H1 tags that slipped through — WordPress handles H1 via post title
+  html = html.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '<h2 style="color:#0f172a;font-size:30px;font-weight:900;margin:56px 0 24px 0;padding-bottom:14px;border-bottom:4px solid #10b981;letter-spacing:-0.025em;line-height:1.2">$1</h2>');
 
   if (!html.includes('data-premium-wp') && !html.includes('data-sota-content')) {
     const wrapperStart =
@@ -1377,6 +1383,272 @@ Output ONLY the HTML paragraphs, nothing else.`;
     return 40;
   }
 
+
+  /**
+   * Build comprehensive JSON-LD schema inline.
+   * Replaces SchemaGenerator which was returning empty @graph.
+   */
+  private buildInlineSchema(params: {
+    title: string;
+    seoTitle: string;
+    metaDescription: string;
+    slug: string;
+    keyword: string;
+    secondaryKeywords: string[];
+    content: string;
+    wordCount: number;
+    qualityScore: QualityScore;
+    eeatScore: any;
+  }): any {
+    const now = new Date().toISOString();
+    const url = `${this.config.organizationUrl}/${params.slug}`;
+    const orgUrl = this.config.organizationUrl;
+
+    // Extract FAQ questions from <details>/<summary> blocks
+    const faqItems: Array<{ question: string; answer: string }> = [];
+    const faqRegex = /<summary[^>]*>(.*?)<\/summary>\s*<div[^>]*>(.*?)<\/div>/gis;
+    let faqMatch;
+    while ((faqMatch = faqRegex.exec(params.content)) !== null) {
+      const question = faqMatch[1].replace(/<[^>]+>/g, '').replace(/\+$/, '').trim();
+      const answer = faqMatch[2].replace(/<[^>]+>/g, '').trim();
+      if (question && answer) {
+        faqItems.push({ question, answer });
+      }
+    }
+
+    // Extract headings for TOC / speakable
+    const headings: string[] = [];
+    const headingRegex = /<h[23][^>]*>(.*?)<\/h[23]>/gi;
+    let hMatch;
+    while ((hMatch = headingRegex.exec(params.content)) !== null) {
+      headings.push(hMatch[1].replace(/<[^>]+>/g, '').trim());
+    }
+
+    const estimatedReadTime = Math.ceil(params.wordCount / 250);
+
+    const graph: any[] = [];
+
+    // 1. Organization
+    graph.push({
+      '@type': 'Organization',
+      '@id': orgUrl + '/#organization',
+      name: this.config.organizationName,
+      url: orgUrl,
+      ...(this.config.logoUrl ? {
+        logo: {
+          '@type': 'ImageObject',
+          url: this.config.logoUrl,
+        }
+      } : {}),
+    });
+
+    // 2. WebSite
+    graph.push({
+      '@type': 'WebSite',
+      '@id': orgUrl + '/#website',
+      url: orgUrl,
+      name: this.config.organizationName,
+      publisher: { '@id': orgUrl + '/#organization' },
+    });
+
+    // 3. WebPage
+    graph.push({
+      '@type': 'WebPage',
+      '@id': url + '/#webpage',
+      url,
+      name: params.seoTitle,
+      description: params.metaDescription,
+      isPartOf: { '@id': orgUrl + '/#website' },
+      datePublished: now,
+      dateModified: now,
+      inLanguage: 'en-US',
+    });
+
+    // 4. Article
+    graph.push({
+      '@type': 'Article',
+      '@id': url + '/#article',
+      isPartOf: { '@id': url + '/#webpage' },
+      headline: params.seoTitle,
+      description: params.metaDescription,
+      datePublished: now,
+      dateModified: now,
+      author: {
+        '@type': 'Person',
+        name: this.config.authorName,
+        ...(this.config.authorCredentials ? { jobTitle: this.config.authorCredentials } : {}),
+      },
+      publisher: { '@id': orgUrl + '/#organization' },
+      mainEntityOfPage: { '@id': url + '/#webpage' },
+      keywords: [params.keyword, ...params.secondaryKeywords.slice(0, 8)].join(', '),
+      wordCount: params.wordCount,
+      timeRequired: `PT${estimatedReadTime}M`,
+      inLanguage: 'en-US',
+      ...(headings.length > 0 ? {
+        speakable: {
+          '@type': 'SpeakableSpecification',
+          cssSelector: ['h2', 'h3'],
+        }
+      } : {}),
+    });
+
+    // 5. BreadcrumbList
+    graph.push({
+      '@type': 'BreadcrumbList',
+      '@id': url + '/#breadcrumb',
+      itemListElement: [
+        {
+          '@type': 'ListItem',
+          position: 1,
+          name: 'Home',
+          item: orgUrl,
+        },
+        {
+          '@type': 'ListItem',
+          position: 2,
+          name: params.seoTitle,
+          item: url,
+        },
+      ],
+    });
+
+    // 6. FAQPage (if FAQ questions exist)
+    if (faqItems.length > 0) {
+      graph.push({
+        '@type': 'FAQPage',
+        '@id': url + '/#faq',
+        mainEntity: faqItems.map(faq => ({
+          '@type': 'Question',
+          name: faq.question,
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: faq.answer,
+          },
+        })),
+      });
+    }
+
+    return {
+      '@context': 'https://schema.org',
+      '@graph': graph,
+    };
+  }
+
+
+
+  /**
+   * Humanize content — aggressive AI phrase removal + rewrite pass.
+   * Targets the patterns that AI detectors flag most often.
+   */
+  private async humanizeContent(html: string, keyword: string): Promise<string> {
+    let content = html;
+
+    // ── Pass 1: Regex-based AI phrase removal ───────────────────────────────
+    const aiPhrases = [
+      // Opening/transition clichés
+      /\bIn today'?s (?:fast-paced|ever-changing|digital|modern|rapidly evolving)\b[^.]*\./gi,
+      /\bIn the (?:realm|world|landscape|arena|sphere) of\b/gi,
+      /\bIt'?s (?:worth noting|important to note|no secret|safe to say|clear) that\b/gi,
+      /\bLet'?s (?:dive|delve|explore|take a (?:closer |deep )?look|unpack|break down)\b/gi,
+      /\bWhen it comes to\b/gi,
+      /\bAt the end of the day\b/gi,
+      /\bIn (?:this|the) (?:comprehensive|ultimate|complete|definitive) guide\b/gi,
+      /\bWithout further ado\b/gi,
+      /\bFirst and foremost\b/gi,
+      /\bLast but not least\b/gi,
+      /\bNeedless to say\b/gi,
+      /\bIt goes without saying\b/gi,
+      // Filler intensifiers
+      /\btruly (?:remarkable|transformative|revolutionary|exceptional|outstanding)\b/gi,
+      /\bremarkably\b/gi,
+      /\bseamlessly?\b/gi,
+      /\bleverage\b/gi,
+      /\brobust\b/gi,
+      /\bholistic(?:ally)?\b/gi,
+      /\bgame-?changer\b/gi,
+      /\bcutting-?edge\b/gi,
+      /\bstate-?of-?the-?art\b/gi,
+      /\bunlock(?:ing)? (?:the )?(?:full )?potential\b/gi,
+      /\btake (?:it |things )?to the next level\b/gi,
+      /\bembark on (?:a |this |your )\b/gi,
+      /\bjourney\b(?! (?:to|from|back|home))/gi,
+      /\bnavigat(?:e|ing) (?:the )?(?:complexities|landscape|world|waters)\b/gi,
+      /\btap(?:ping)? into\b/gi,
+      /\bfoster(?:ing)?\b/gi,
+      /\bempowering?\b/gi,
+      /\balas\b/gi,
+      /\bmoreover\b/gi,
+      /\bfurthermore\b/gi,
+      /\bnevertheless\b/gi,
+      /\bnotwithstanding\b/gi,
+      /\bconsequently\b/gi,
+      // Conclusions
+      /\bIn conclusion\b/gi,
+      /\bTo (?:sum up|summarize|wrap (?:up|things up))\b/gi,
+      /\bAll in all\b/gi,
+      /\bThe bottom line (?:is|here)\b/gi,
+    ];
+
+    for (const pattern of aiPhrases) {
+      content = content.replace(pattern, '');
+    }
+
+    // Clean up double spaces and empty tags from removals
+    content = content.replace(/\s{2,}/g, ' ');
+    content = content.replace(/<p[^>]*>\s*<\/p>/g, '');
+
+    // ── Pass 2: AI rewrite pass for natural voice ────────────────────────────
+    try {
+      const humanizePrompt = `You are a HUMAN editor. Rewrite this article to sound 100% human-written.
+
+CRITICAL RULES:
+1. Use contractions: "don't", "you'll", "it's", "we're", "that's", "isn't"
+2. Use FIRST and SECOND person: "I", "you", "we", "your", "my"
+3. Start sentences with "And", "But", "So", "Look," "Here's the thing"
+4. Add personal opinions: "Honestly,", "I'd argue", "In my experience"
+5. Use rhetorical questions: "Sound familiar?", "Makes sense, right?"
+6. Vary sentence length dramatically — mix 4-word punches with longer explanations
+7. Use informal transitions: "Thing is,", "Real talk:", "Here's what most people miss:"
+8. Add slight imperfections: parenthetical asides (like this), em dashes — for emphasis
+9. Reference real scenarios, not abstract concepts
+10. NEVER use: delve, realm, landscape, leverage, robust, seamless, holistic, journey, embark, foster, empower, cutting-edge, game-changer, moreover, furthermore, nevertheless, consequently, it's worth noting, when it comes to, in today's fast-paced, at the end of the day
+11. DO NOT change any HTML structure, links, headings, or factual content
+12. DO NOT add new sections or remove existing ones
+13. DO NOT change any href URLs
+14. Keep ALL existing HTML tags and styles intact
+15. Output PURE HTML — no markdown
+
+ARTICLE TO HUMANIZE:
+${content}
+
+Return the COMPLETE article with humanized voice. Preserve ALL HTML structure exactly.`;
+
+      const result = await this.engine.generateWithModel({
+        prompt: humanizePrompt,
+        model: this.config.primaryModel ?? 'gemini',
+        apiKeys: this.config.apiKeys,
+        systemPrompt: 'You are a veteran human editor with 20 years of experience. Your job is to make AI-generated text sound naturally human. Preserve all HTML structure. Output PURE HTML only.',
+        temperature: 0.82,
+        maxTokens: Math.min(32768, Math.max(8192, Math.ceil(content.length / 2))),
+      });
+
+      if (result.content && result.content.trim().length > content.length * 0.90) {
+        this.log('Humanization pass complete — content rewritten for natural voice');
+        return result.content.trim();
+      }
+      this.warn('Humanization: rewritten version too short, keeping original');
+    } catch (e) {
+      this.warn('Humanization pass failed (non-fatal): ' + e);
+    }
+
+    return content;
+  }
+
+
+
+  
+
+  
   // ─────────────────────────────────────────────────────────────────────────
   // MAIN GENERATION ENTRY POINT
   // ─────────────────────────────────────────────────────────────────────────
@@ -1560,12 +1832,12 @@ Output ONLY the HTML paragraphs, nothing else.`;
       this.log('Injected YouTube video section');
     }
 
-    // Append references
+    // ✅ FIX: Do NOT append references here. Phase 3j handles references exclusively.
+    // The old code appended here AND in Phase 3j → duplicate references in output.
     if (references.length > 0) {
-      const referencesSection = this.referenceService.formatReferencesSection(references);
-      content = content + referencesSection;
-      this.log('Added ' + references.length + ' references');
+      this.log('Phase 2: ' + references.length + ' references found (will be added in Phase 3j)');
     }
+
 
     const phase2Ms = endPhase2Timer();
     this.log(
@@ -1660,6 +1932,15 @@ Output ONLY the HTML paragraphs, nothing else.`;
       enhancedContent = polishReadability(enhancedContent);
       this.log('3h: Readability polish complete');
     } catch (e) { this.warn(`3h: polishReadability failed (non-fatal): ${e}`); }
+
+    // 3h-b: AI humanization pass — makes content undetectable by AI detectors
+    try {
+      this.log('3h-b: Running humanization pass...');
+      enhancedContent = await this.humanizeContent(enhancedContent, options.keyword);
+      this.log('3h-b: Humanization complete');
+    } catch (e) { this.warn(`3h-b: Humanization failed (non-fatal): ${e}`); }
+
+    
 
     // 3i: HTML structure enforcement
     try {
@@ -1806,25 +2087,35 @@ Output ONLY the HTML paragraphs, nothing else.`;
 
     const secondaryKeywords = serpAnalysis.semanticEntities?.slice(0, 10) ?? [];
 
-    let schema: GeneratedContent['schema'];
+    // ✅ FIX: Build schema inline — the SchemaGenerator was returning empty @graph.
+    // This builds a comprehensive Article + FAQPage + BreadcrumbList schema directly.
+    let schema: any;
     try {
-      schema = this.schemaGenerator.generateComprehensiveSchema(
+      schema = this.buildInlineSchema({
         title,
-        enhancedContent,
+        seoTitle,
         metaDescription,
         slug,
-        options.keyword,
+        keyword: options.keyword,
         secondaryKeywords,
-        metrics,
+        content: enhancedContent,
+        wordCount: finalWordCount,
         qualityScore,
-        internalLinks,
         eeatScore,
-        new Date(),
-        this.config.primaryModel ?? 'gemini',
-        this.config.useConsensus ?? false,
-        `${this.config.organizationUrl}/${slug}`
-      );
-    } catch (e) { this.warn(`Schema generation failed (non-fatal): ${e}`); }
+      });
+      this.log('Schema: Built comprehensive JSON-LD with ' + (schema?.['@graph']?.length ?? 0) + ' entities');
+    } catch (e) {
+      this.warn('Schema generation failed (non-fatal): ' + e);
+      // Fallback: minimal valid schema
+      schema = {
+        '@context': 'https://schema.org',
+        '@type': 'Article',
+        headline: seoTitle,
+        description: metaDescription,
+        author: { '@type': 'Person', name: this.config.authorName },
+      };
+    }
+
 
     const phase5Ms = endPhase5Timer();
     const totalDuration = Date.now() - startTime;
@@ -1862,14 +2153,29 @@ Output ONLY the HTML paragraphs, nothing else.`;
       generatedAt: new Date(),
       model: this.config.primaryModel ?? 'gemini',
       consensusUsed: this.config.useConsensus ?? false,
-      neuronWriterQueryId: neuron?.queryId,
+      neuronWriterQueryId: neuron?.queryId ?? undefined,
       neuronWriterAnalysis: neuron
         ? {
             ...neuron.analysis,
             queryid: neuron.queryId,
             status: 'ready',
           }
-        : undefined,
+        : (this.config.neuronWriterApiKey && this.config.neuronWriterProjectId
+          ? {
+              // ✅ FIX: Provide status info even when NW init failed,
+              // so the UI can show "configured but failed" instead of "Not Connected"
+              status: 'failed',
+              keyword: options.keyword,
+              content_score: 0,
+              terms: [],
+              termsExtended: [],
+              entities: [],
+              headingsH2: [],
+              headingsH3: [],
+              _failReason: 'NeuronWriter query returned no data. Delete the broken query in NeuronWriter dashboard and retry.',
+            }
+          : undefined),
+
       postProcessing: {
         aiPhrasesRemoved: true,
         visualBreaksEnforced: true,
