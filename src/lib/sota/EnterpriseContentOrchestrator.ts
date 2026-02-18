@@ -566,8 +566,9 @@ export class EnterpriseContentOrchestrator {
     this.log('NeuronWriter: keyword="' + nwKeyword + '" (raw: "' + keyword + '")');
 
     let queryId = options.neuronWriterQueryId?.trim() || '';
+    let isReplacementQuery = false;
 
-    // ── Step 1: Search ALL statuses ──────────────────────────────────────────
+    // ── Step 1: Search for existing query ────────────────────────────────────
     if (!queryId) {
       try {
         const searchResult = await service.findQueryByKeyword(projectId, nwKeyword);
@@ -583,13 +584,44 @@ export class EnterpriseContentOrchestrator {
       }
     }
 
-    // ── Step 2: Create ONLY if truly not found ───────────────────────────────
+    // ── Step 2: If we have an existing query, test it ONCE ───────────────────
+    if (queryId && !isReplacementQuery) {
+      try {
+        const res = await service.getQueryAnalysis(queryId);
+        if (res.success && res.analysis) {
+          const hasData =
+            (res.analysis.terms?.length ?? 0) > 0 ||
+            (res.analysis.headingsH2?.length ?? 0) > 0;
+
+          if (hasData) {
+            this.log('NeuronWriter: READY — ' + service.getAnalysisSummary(res.analysis));
+            return { service, queryId, analysis: res.analysis };
+          }
+
+          // ✅ FIX: "Ready but empty" — this query is PERMANENTLY broken.
+          // Don't poll it 39 more times. Force a new query.
+          this.warn(
+            'NeuronWriter: Query ' + queryId + ' is READY but has ZERO terms/headings. ' +
+            'This query is permanently broken. Creating a replacement...'
+          );
+          queryId = '';
+          // Fall through to Step 3 to create a new query
+        }
+      } catch (e) {
+        this.warn('NeuronWriter: Initial poll failed (non-fatal): ' + e);
+        // Still try creating a new query
+        queryId = '';
+      }
+    }
+
+    // ── Step 3: Create new query if needed ────────────────────────────────────
     if (!queryId) {
-      this.log('NeuronWriter: No existing query — creating new for "' + nwKeyword + '"');
+      this.log('NeuronWriter: Creating new query for "' + nwKeyword + '"');
       try {
         const created = await service.createQuery(projectId, nwKeyword);
         if (created.success && created.queryId) {
           queryId = created.queryId;
+          isReplacementQuery = true;
           this.log('NeuronWriter: Created new query ID=' + queryId);
         } else {
           this.warn('NeuronWriter: createQuery failed: ' + (created.error ?? 'unknown'));
@@ -601,9 +633,16 @@ export class EnterpriseContentOrchestrator {
       }
     }
 
-    // ── Step 3: Poll until ready — ALL errors are non-fatal ──────────────────
-    this.log('NeuronWriter: Polling for analysis readiness...');
-    for (let attempt = 1; attempt <= NW_MAX_POLL_ATTEMPTS; attempt++) {
+    // ── Step 4: Poll until ready ─────────────────────────────────────────────
+    //    For replacement queries: bail quickly if also empty (max 10 polls)
+    //    For brand-new queries: standard patience (max 40 polls)
+    const maxAttempts = isReplacementQuery ? 10 : NW_MAX_POLL_ATTEMPTS;
+    let consecutiveEmptyReady = 0;
+    const MAX_CONSECUTIVE_EMPTY_READY = 3;
+
+    this.log('NeuronWriter: Polling for analysis readiness (max ' + maxAttempts + ' attempts)...');
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const res = await service.getQueryAnalysis(queryId);
 
@@ -619,20 +658,35 @@ export class EnterpriseContentOrchestrator {
             return { service, queryId, analysis: res.analysis };
           }
 
-          // Analysis returned but empty — still wait
+          // ✅ FIX: Track consecutive "ready but empty" responses.
+          // If the query is READY but empty 3 times in a row, it's dead.
+          consecutiveEmptyReady++;
+          if (consecutiveEmptyReady >= MAX_CONSECUTIVE_EMPTY_READY) {
+            this.warn(
+              'NeuronWriter: Query ' + queryId + ' returned "ready but empty" ' +
+              consecutiveEmptyReady + ' times consecutively. ' +
+              'NeuronWriter has no data for "' + nwKeyword + '". ' +
+              'Proceeding WITHOUT NeuronWriter optimization.'
+            );
+            return null;
+          }
+
           this.log(
-            'NeuronWriter: Analysis returned but empty, still waiting... attempt ' +
-              attempt + '/' + NW_MAX_POLL_ATTEMPTS
+            'NeuronWriter: Analysis empty (ready-but-empty count: ' +
+              consecutiveEmptyReady + '/' + MAX_CONSECUTIVE_EMPTY_READY +
+              ') — attempt ' + attempt + '/' + maxAttempts
           );
         } else {
+          // Not ready yet — reset the empty counter since it's still processing
+          consecutiveEmptyReady = 0;
           this.log(
             'NeuronWriter: Not ready yet (' +
               (res.error ?? 'no data') + ') — attempt ' +
-              attempt + '/' + NW_MAX_POLL_ATTEMPTS
+              attempt + '/' + maxAttempts
           );
         }
       } catch (pollErr) {
-        // Never crash the whole generation over a polling error
+        consecutiveEmptyReady = 0;
         this.warn(
           'NeuronWriter: Poll attempt ' + attempt + ' threw (non-fatal): ' + pollErr
         );
@@ -647,11 +701,12 @@ export class EnterpriseContentOrchestrator {
     }
 
     this.warn(
-      'NeuronWriter: Analysis timed out after ' + NW_MAX_POLL_ATTEMPTS +
+      'NeuronWriter: Analysis timed out after ' + maxAttempts +
         ' attempts — proceeding WITHOUT NeuronWriter'
     );
     return null;
   }
+
 
   // ─────────────────────────────────────────────────────────────────────────
   // NEURONWRITER IMPROVEMENT LOOP
